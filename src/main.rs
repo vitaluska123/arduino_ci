@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use serde::{Deserialize, Serialize};
 use serialport::{ClearBuffer, DataBits, FlowControl, Parity, StopBits};
 use std::{
@@ -14,11 +16,23 @@ use std::{
     thread::{self, JoinHandle},
     time::Duration,
 };
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, LogicalPosition, Manager, State, WindowEvent,
 };
+
+fn arduino_cli_command() -> Command {
+    let mut cmd = Command::new("arduino-cli");
+    #[cfg(target_os = "windows")]
+    {
+        // CREATE_NO_WINDOW
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CliPort {
@@ -191,7 +205,7 @@ fn load_session(app: AppHandle) -> Result<AppSession, String> {
 
 #[tauri::command]
 fn compile_project(project_path: String, fqbn: String) -> Result<CliRunResult, String> {
-    let output = Command::new("arduino-cli")
+    let output = arduino_cli_command()
         .args(["compile", "--fqbn", &fqbn, &project_path])
         .output()
         .map_err(|e| format!("Не удалось запустить arduino-cli compile: {e}"))?;
@@ -210,7 +224,7 @@ fn upload_project(
     fqbn: String,
     port: String,
 ) -> Result<CliRunResult, String> {
-    let output = Command::new("arduino-cli")
+    let output = arduino_cli_command()
         .args(["upload", "-p", &port, "--fqbn", &fqbn, &project_path])
         .output()
         .map_err(|e| format!("Не удалось запустить arduino-cli upload: {e}"))?;
@@ -225,7 +239,7 @@ fn upload_project(
 
 #[tauri::command]
 fn list_ports() -> Result<Vec<CliPort>, String> {
-    let output = Command::new("arduino-cli")
+    let output = arduino_cli_command()
         .args(["board", "list", "--format", "json"])
         .output()
         .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
@@ -294,7 +308,7 @@ fn board_listall(search: Option<String>) -> Result<Vec<CliBoard>, String> {
         }
     }
 
-    let output = Command::new("arduino-cli")
+    let output = arduino_cli_command()
         .args(args)
         .output()
         .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
@@ -330,7 +344,7 @@ fn board_listall(search: Option<String>) -> Result<Vec<CliBoard>, String> {
     }
 
     if boards.is_empty() {
-        let output_connected = Command::new("arduino-cli")
+        let output_connected = arduino_cli_command()
             .args(["board", "list", "--format", "json"])
             .output()
             .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
@@ -399,7 +413,7 @@ fn parse_connected_boards(parsed: &serde_json::Value) -> Vec<CliBoard> {
 
 #[tauri::command]
 fn lib_search(query: String) -> Result<Vec<CliLibrary>, String> {
-    let output = Command::new("arduino-cli")
+    let output = arduino_cli_command()
         .args(["lib", "search", &query, "--format", "json"])
         .output()
         .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
@@ -451,7 +465,7 @@ fn lib_search(query: String) -> Result<Vec<CliLibrary>, String> {
 
 #[tauri::command]
 fn lib_install(name: String, version: Option<String>) -> Result<CliRunResult, String> {
-    let mut cmd = Command::new("arduino-cli");
+    let mut cmd = arduino_cli_command();
     cmd.arg("lib").arg("install").arg(name);
 
     if let Some(v) = version {
@@ -474,7 +488,7 @@ fn lib_install(name: String, version: Option<String>) -> Result<CliRunResult, St
 
 #[tauri::command]
 fn lib_list() -> Result<Vec<CliInstalledLibrary>, String> {
-    let output = Command::new("arduino-cli")
+    let output = arduino_cli_command()
         .args(["lib", "list", "--format", "json"])
         .output()
         .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
@@ -531,7 +545,7 @@ async fn lib_uninstall(name: String) -> Result<CliRunResult, String> {
     }
 
     tauri::async_runtime::spawn_blocking(move || {
-        let output = Command::new("arduino-cli")
+        let output = arduino_cli_command()
             .arg("lib")
             .arg("uninstall")
             .arg(&lib_name)
@@ -551,7 +565,7 @@ async fn lib_uninstall(name: String) -> Result<CliRunResult, String> {
 
 #[tauri::command]
 fn core_search(query: Option<String>) -> Result<Vec<CliCore>, String> {
-    let mut cmd = Command::new("arduino-cli");
+    let mut cmd = arduino_cli_command();
     cmd.arg("core").arg("search");
     if let Some(q) = query.as_deref().map(str::trim) {
         if !q.is_empty() {
@@ -690,7 +704,7 @@ async fn core_install(name: String, _version: Option<String>) -> Result<CliRunRe
     }
 
     tauri::async_runtime::spawn_blocking(move || {
-        let output = Command::new("arduino-cli")
+        let output = arduino_cli_command()
             .arg("core")
             .arg("install")
             .arg(&core_name)
@@ -899,42 +913,48 @@ fn main() {
                 });
             }
 
-            let open_i = MenuItemBuilder::new("Открыть").id("open").build(app)?;
-            let quit_i = MenuItemBuilder::new("Завершить").id("quit").build(app)?;
-            let menu = MenuBuilder::new(app).item(&open_i).item(&quit_i).build()?;
+            let open_i = MenuItemBuilder::new("Открыть").id("open").build(app);
+            let quit_i = MenuItemBuilder::new("Завершить").id("quit").build(app);
 
-            let app_for_click = app_handle.clone();
-            let app_for_menu = app_handle.clone();
+            let mut tray_ready = false;
+            if let (Ok(open_i), Ok(quit_i)) = (open_i, quit_i) {
+                if let Ok(menu) = MenuBuilder::new(app).item(&open_i).item(&quit_i).build() {
+                    if let Some(icon) = app.default_window_icon().cloned() {
+                        let app_for_click = app_handle.clone();
+                        let app_for_menu = app_handle.clone();
+                        tray_ready = TrayIconBuilder::with_id("main")
+                            .icon(icon)
+                            .tooltip("Arduino CI")
+                            .menu(&menu)
+                            .show_menu_on_left_click(false)
+                            .on_tray_icon_event(move |_tray, event| {
+                                if let TrayIconEvent::Click {
+                                    button: MouseButton::Left,
+                                    button_state: MouseButtonState::Up,
+                                    ..
+                                } = event
+                                {
+                                    let _ = toggle_main_window(&app_for_click);
+                                }
+                            })
+                            .on_menu_event(move |_tray, event| match event.id.as_ref() {
+                                "open" => {
+                                    let _ = show_window_bottom_right(&app_for_menu);
+                                }
+                                "quit" => {
+                                    std::process::exit(0);
+                                }
+                                _ => {}
+                            })
+                            .build(app)
+                            .is_ok();
+                    }
+                }
+            }
 
-            let _tray = TrayIconBuilder::with_id("main")
-                .icon(
-                    app.default_window_icon()
-                        .cloned()
-                        .ok_or("Иконка приложения не найдена")?,
-                )
-                .tooltip("Arduino CI")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_tray_icon_event(move |_tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let _ = toggle_main_window(&app_for_click);
-                    }
-                })
-                .on_menu_event(move |_tray, event| match event.id.as_ref() {
-                    "open" => {
-                        let _ = show_window_bottom_right(&app_for_menu);
-                    }
-                    "quit" => {
-                        std::process::exit(0);
-                    }
-                    _ => {}
-                })
-                .build(app)?;
+            if !tray_ready {
+                let _ = show_window_bottom_right(&app_handle);
+            }
 
             Ok(())
         })
