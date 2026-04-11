@@ -105,10 +105,6 @@ fn show_window_bottom_right(app: &AppHandle) -> Result<(), String> {
         .get_webview_window("main")
         .ok_or("Окно 'main' не найдено".to_string())?;
 
-    window.show().map_err(|e| e.to_string())?;
-    window.unminimize().map_err(|e| e.to_string())?;
-    let _ = window.set_focus();
-
     let monitor = window
         .current_monitor()
         .map_err(|e| e.to_string())?
@@ -127,7 +123,9 @@ fn show_window_bottom_right(app: &AppHandle) -> Result<(), String> {
         let _ = window.set_position(LogicalPosition::new(x, y));
     }
 
-    // One extra focus call after positioning improves first-open reliability on Windows.
+    // Position first, then show/focus to avoid visible "jump" and sluggish opening.
+    let _ = window.unminimize();
+    window.show().map_err(|e| e.to_string())?;
     let _ = window.set_focus();
 
     Ok(())
@@ -161,7 +159,7 @@ fn session_file_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-fn pick_project_dir(app: AppHandle) -> Result<Option<String>, String> {
+fn pick_project_dir(_app: AppHandle) -> Result<Option<String>, String> {
     let picked = rfd::FileDialog::new()
         .set_title("Выберите папку проекта Arduino")
         .pick_folder();
