@@ -1,10 +1,9 @@
 use serde::{Deserialize, Serialize};
-use std::process::Command;
-use tauri::LogicalPosition;
+use std::{fs, path::PathBuf, process::Command};
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, WindowEvent,
+    AppHandle, LogicalPosition, Manager, WindowEvent,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -31,17 +30,30 @@ struct CliLibrary {
     website: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+struct AppSession {
+    project_path: Option<String>,
+    fqbn: Option<String>,
+    port: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CliRunResult {
+    success: bool,
+    stdout: String,
+    stderr: String,
+    status: i32,
+}
+
 fn show_window_bottom_right(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or("Окно 'main' не найдено".to_string())?;
 
-    // show first (needed on some platforms before querying monitor data reliably)
     window.show().map_err(|e| e.to_string())?;
     window.unminimize().map_err(|e| e.to_string())?;
     window.set_focus().map_err(|e| e.to_string())?;
 
-    // Move to bottom-right of current monitor work area
     let monitor = window
         .current_monitor()
         .map_err(|e| e.to_string())?
@@ -73,8 +85,85 @@ fn toggle_main_window(app: &AppHandle) -> Result<(), String> {
     } else {
         show_window_bottom_right(app)?;
     }
-
     Ok(())
+}
+
+fn session_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir error: {e}"))?;
+
+    if !app_dir.exists() {
+        fs::create_dir_all(&app_dir).map_err(|e| format!("create_dir_all error: {e}"))?;
+    }
+
+    Ok(app_dir.join("session.json"))
+}
+
+#[tauri::command]
+fn pick_project_dir(app: AppHandle) -> Result<Option<String>, String> {
+    let picked = rfd::FileDialog::new()
+        .set_title("Выберите папку проекта Arduino")
+        .pick_folder();
+
+    Ok(picked.map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn save_session(app: AppHandle, session: AppSession) -> Result<(), String> {
+    let path = session_file_path(&app)?;
+    let text =
+        serde_json::to_string_pretty(&session).map_err(|e| format!("serialize error: {e}"))?;
+    fs::write(path, text).map_err(|e| format!("write session error: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn load_session(app: AppHandle) -> Result<AppSession, String> {
+    let path = session_file_path(&app)?;
+    if !path.exists() {
+        return Ok(AppSession::default());
+    }
+
+    let text = fs::read_to_string(path).map_err(|e| format!("read session error: {e}"))?;
+    let session: AppSession =
+        serde_json::from_str(&text).map_err(|e| format!("parse session error: {e}"))?;
+    Ok(session)
+}
+
+#[tauri::command]
+fn compile_project(project_path: String, fqbn: String) -> Result<CliRunResult, String> {
+    let output = Command::new("arduino-cli")
+        .args(["compile", "--fqbn", &fqbn, &project_path])
+        .output()
+        .map_err(|e| format!("Не удалось запустить arduino-cli compile: {e}"))?;
+
+    Ok(CliRunResult {
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        status: output.status.code().unwrap_or(-1),
+    })
+}
+
+#[tauri::command]
+fn upload_project(
+    project_path: String,
+    fqbn: String,
+    port: String,
+) -> Result<CliRunResult, String> {
+    let output = Command::new("arduino-cli")
+        .args(["upload", "-p", &port, "--fqbn", &fqbn, &project_path])
+        .output()
+        .map_err(|e| format!("Не удалось запустить arduino-cli upload: {e}"))?;
+
+    Ok(CliRunResult {
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        status: output.status.code().unwrap_or(-1),
+    })
 }
 
 #[tauri::command]
@@ -210,7 +299,7 @@ fn lib_search(query: String) -> Result<Vec<CliLibrary>, String> {
 }
 
 #[tauri::command]
-fn lib_install(name: String, version: Option<String>) -> Result<String, String> {
+fn lib_install(name: String, version: Option<String>) -> Result<CliRunResult, String> {
     let mut cmd = Command::new("arduino-cli");
     cmd.arg("lib").arg("install").arg(name);
 
@@ -224,14 +313,12 @@ fn lib_install(name: String, version: Option<String>) -> Result<String, String> 
         .output()
         .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
 
-    if !output.status.success() {
-        return Err(format!(
-            "Ошибка установки: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(CliRunResult {
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        status: output.status.code().unwrap_or(-1),
+    })
 }
 
 fn main() {
@@ -242,24 +329,20 @@ fn main() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();
 
-                // Hide on close button
                 let app_for_close = app_handle.clone();
-                window.on_window_event(move |event| {
-                    match event {
-                        WindowEvent::CloseRequested { api, .. } => {
-                            api.prevent_close();
-                            if let Some(w) = app_for_close.get_webview_window("main") {
-                                let _ = w.hide();
-                            }
+                window.on_window_event(move |event| match event {
+                    WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        if let Some(w) = app_for_close.get_webview_window("main") {
+                            let _ = w.hide();
                         }
-                        // Hide when click outside
-                        WindowEvent::Focused(false) => {
-                            if let Some(w) = app_for_close.get_webview_window("main") {
-                                let _ = w.hide();
-                            }
-                        }
-                        _ => {}
                     }
+                    WindowEvent::Focused(false) => {
+                        if let Some(w) = app_for_close.get_webview_window("main") {
+                            let _ = w.hide();
+                        }
+                    }
+                    _ => {}
                 });
             }
 
@@ -303,6 +386,11 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            pick_project_dir,
+            save_session,
+            load_session,
+            compile_project,
+            upload_project,
             list_ports,
             board_listall,
             lib_search,
