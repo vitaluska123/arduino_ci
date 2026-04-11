@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api/arduinoCli";
 
 function App() {
@@ -38,8 +39,12 @@ function App() {
   const [busy, setBusy] = useState(false);
 
   const isDark = theme === "dark" || (theme === "system" && systemDark);
-  const bgClass = isDark ? "bg-slate-900 text-slate-100" : "bg-gray-100 text-gray-900";
-  const panelClass = isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200";
+  const bgClass = isDark
+    ? "bg-slate-900 text-slate-100"
+    : "bg-gray-100 text-gray-900";
+  const panelClass = isDark
+    ? "bg-slate-800 border-slate-700"
+    : "bg-white border-gray-200";
   const inputClass = isDark
     ? "border-slate-600 bg-slate-900 text-slate-100"
     : "border-gray-300 bg-white text-gray-900";
@@ -171,7 +176,9 @@ function App() {
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
-    document.documentElement.style.backgroundColor = isDark ? "#0f172a" : "#f3f4f6";
+    document.documentElement.style.backgroundColor = isDark
+      ? "#0f172a"
+      : "#f3f4f6";
     document.body.style.backgroundColor = isDark ? "#0f172a" : "#f3f4f6";
   }, [isDark]);
 
@@ -301,7 +308,9 @@ function App() {
     }));
     if (res.stdout) appendLog(res.stdout);
     if (res.stderr) appendLog(res.stderr);
-    appendLog(`=== CORE INSTALL END (${selectedCoreId}, status=${res.status}) ===`);
+    appendLog(
+      `=== CORE INSTALL END (${selectedCoreId}, status=${res.status}) ===`,
+    );
     setCoreInstallBusy(false);
   };
 
@@ -353,22 +362,42 @@ function App() {
     }
   };
 
+  const onMinimizeToTray = async () => {
+    try {
+      await getCurrentWindow().hide();
+    } catch (e) {
+      appendLog(`Ошибка сворачивания окна: ${String(e)}`);
+    }
+  };
+
   return (
     <div className={`fixed inset-0 flex flex-col ${bgClass}`}>
       <div className={`border-b ${panelClass}`}>
         <div className="flex flex-wrap items-center justify-between gap-2 px-2 py-2">
           <h1 className="text-lg font-semibold">Arduino CI</h1>
           <div className="flex flex-wrap gap-2">
-            <button className={`px-3 py-1 border ${inputClass}`} onClick={() => setActivePage("main")}>
+            <button
+              className={`px-3 py-1 border ${inputClass}`}
+              onClick={() => setActivePage("main")}
+            >
               Главная
             </button>
-            <button className={`px-3 py-1 border ${inputClass}`} onClick={() => setActivePage("libs")}>
+            <button
+              className={`px-3 py-1 border ${inputClass}`}
+              onClick={() => setActivePage("libs")}
+            >
               Libs
             </button>
-            <button className={`px-3 py-1 border ${inputClass}`} onClick={() => setActivePage("serial")}>
+            <button
+              className={`px-3 py-1 border ${inputClass}`}
+              onClick={() => setActivePage("serial")}
+            >
               Serial
             </button>
-            <button className={`px-3 py-1 border ${inputClass}`} onClick={() => setActivePage("settings")}>
+            <button
+              className={`px-3 py-1 border ${inputClass}`}
+              onClick={() => setActivePage("settings")}
+            >
               Настройки
             </button>
           </div>
@@ -386,7 +415,10 @@ function App() {
                   onChange={(e) => setProjectPath(e.target.value)}
                   placeholder="Путь к проекту"
                 />
-                <button className={`px-3 py-1 border ${inputClass}`} onClick={pickProject}>
+                <button
+                  className={`px-3 py-1 border ${inputClass}`}
+                  onClick={pickProject}
+                >
                   Выбрать
                 </button>
               </div>
@@ -398,7 +430,10 @@ function App() {
                   onChange={(e) => setBoardQuery(e.target.value)}
                   placeholder="Поиск платы"
                 />
-                <button className={`px-3 py-1 border ${inputClass}`} onClick={() => refreshBoards(boardQuery)}>
+                <button
+                  className={`px-3 py-1 border ${inputClass}`}
+                  onClick={() => refreshBoards(boardQuery)}
+                >
                   Найти
                 </button>
               </div>
@@ -432,7 +467,10 @@ function App() {
                   ))}
                 </select>
 
-                <button className={`px-3 py-1 border shrink-0 ${inputClass}`} onClick={refreshPorts}>
+                <button
+                  className={`px-3 py-1 border shrink-0 ${inputClass}`}
+                  onClick={refreshPorts}
+                >
                   Обновить порты
                 </button>
               </div>
@@ -458,7 +496,9 @@ function App() {
 
           {activePage === "libs" && (
             <div className="flex h-full min-h-0 flex-col gap-2 px-2 py-2">
-              <div className="text-sm font-semibold">Библиотеки (arduino-cli lib)</div>
+              <div className="text-sm font-semibold">
+                Библиотеки (arduino-cli lib)
+              </div>
               <div className="flex flex-wrap gap-2">
                 <input
                   className={`flex-1 border px-2 py-1 ${inputClass}`}
@@ -484,11 +524,18 @@ function App() {
 
               <div className="flex-1 min-h-0 space-y-2 overflow-y-auto">
                 {libraries.map((lib) => {
-                  const installed = installedLibSet.has((lib.name || "").toLowerCase());
+                  const installed = installedLibSet.has(
+                    (lib.name || "").toLowerCase(),
+                  );
                   return (
-                    <div key={lib.name} className={`border px-2 py-2 flex items-center justify-between ${inputClass}`}>
+                    <div
+                      key={lib.name}
+                      className={`border px-2 py-2 flex items-center justify-between ${inputClass}`}
+                    >
                       <div className="min-w-0">
-                        <div className="text-sm font-medium truncate">{lib.name}</div>
+                        <div className="text-sm font-medium truncate">
+                          {lib.name}
+                        </div>
                         <div className={`text-xs ${mutedClass}`}>
                           {lib.latest ? `latest ${lib.latest}` : "version ?"}
                         </div>
@@ -513,7 +560,11 @@ function App() {
                     </div>
                   );
                 })}
-                {!libraries.length && <div className={`text-sm ${mutedClass}`}>Ничего не найдено</div>}
+                {!libraries.length && (
+                  <div className={`text-sm ${mutedClass}`}>
+                    Ничего не найдено
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -539,13 +590,18 @@ function App() {
                   value={serialBaud}
                   onChange={(e) => setSerialBaud(e.target.value)}
                 >
-                  {["9600", "19200", "38400", "57600", "115200", "230400"].map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))}
+                  {["9600", "19200", "38400", "57600", "115200", "230400"].map(
+                    (b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ),
+                  )}
                 </select>
-                <button className={`px-3 py-1 border ${inputClass}`} onClick={refreshPorts}>
+                <button
+                  className={`px-3 py-1 border ${inputClass}`}
+                  onClick={refreshPorts}
+                >
                   Обновить порты
                 </button>
                 {!serialRunning ? (
@@ -565,11 +621,16 @@ function App() {
                     {serialBusy ? "Остановка..." : "Stop"}
                   </button>
                 )}
-                <button className={`px-3 py-1 border ${inputClass}`} onClick={() => setSerialOutput("")}>
+                <button
+                  className={`px-3 py-1 border ${inputClass}`}
+                  onClick={() => setSerialOutput("")}
+                >
                   Clear
                 </button>
                 <span className={`text-xs self-center ${mutedClass}`}>
-                  {serialRunning ? `RUNNING ${serialPort}@${serialBaud}` : "STOPPED"}
+                  {serialRunning
+                    ? `RUNNING ${serialPort}@${serialBaud}`
+                    : "STOPPED"}
                 </span>
               </div>
 
@@ -626,15 +687,21 @@ function App() {
                 <option value="dark">Dark</option>
               </select>
 
-              <div className={`mt-2 border-t pt-2 ${isDark ? "border-slate-700" : "border-gray-300"}`}>
-                <div className="text-sm font-semibold mb-1">Наборы плат (arduino-cli core install)</div>
+              <div
+                className={`mt-2 border-t pt-2 ${isDark ? "border-slate-700" : "border-gray-300"}`}
+              >
+                <div className="text-sm font-semibold mb-1">
+                  Наборы плат (arduino-cli core install)
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <select
                     className={`w-full max-w-[420px] border px-2 py-1 ${inputClass}`}
                     value={selectedCoreId}
                     onChange={(e) => setSelectedCoreId(e.target.value)}
                   >
-                    {!cores.length && <option value="">Нет доступных наборов плат</option>}
+                    {!cores.length && (
+                      <option value="">Нет доступных наборов плат</option>
+                    )}
                     {cores.map((core) => (
                       <option key={core.id} value={core.id}>
                         {core.name} — {core.id}
@@ -665,7 +732,10 @@ function App() {
           <div className={`border-t ${panelClass}`}>
             <div className="flex items-center justify-between px-2 py-1">
               <div className="text-xs font-semibold">Логи</div>
-              <button onClick={() => setLog("")} className={`px-3 py-1 text-xs border ${inputClass}`}>
+              <button
+                onClick={() => setLog("")}
+                className={`px-3 py-1 text-xs border ${inputClass}`}
+              >
                 Clear log
               </button>
             </div>
