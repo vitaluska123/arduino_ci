@@ -31,6 +31,12 @@ struct CliLibrary {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct CliInstalledLibrary {
+    name: String,
+    version: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct CliCore {
     id: String,
     name: String,
@@ -363,27 +369,33 @@ fn lib_search(query: String) -> Result<Vec<CliLibrary>, String> {
         serde_json::from_slice(&output.stdout).map_err(|e| format!("Ошибка разбора JSON: {e}"))?;
 
     let mut libs = Vec::new();
-    if let Some(arr) = parsed.get("libraries").and_then(|v| v.as_array()) {
+    if let Some(arr) = parsed
+        .get("libraries")
+        .or_else(|| parsed.get("result").and_then(|r| r.get("libraries")))
+        .and_then(|v| v.as_array())
+    {
         for l in arr {
+            let item = l.get("library").unwrap_or(l);
             libs.push(CliLibrary {
-                name: l
+                name: item
                     .get("name")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
-                latest: l
+                latest: item
                     .get("latest")
+                    .or_else(|| item.get("version"))
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
-                sentence: l
+                sentence: item
                     .get("sentence")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
-                paragraph: l
+                paragraph: item
                     .get("paragraph")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
-                website: l
+                website: item
                     .get("website")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
@@ -418,6 +430,83 @@ fn lib_install(name: String, version: Option<String>) -> Result<CliRunResult, St
 }
 
 #[tauri::command]
+fn lib_list() -> Result<Vec<CliInstalledLibrary>, String> {
+    let output = Command::new("arduino-cli")
+        .args(["lib", "list", "--format", "json"])
+        .output()
+        .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("Ошибка разбора JSON: {e}"))?;
+
+    let arr = parsed
+        .get("installed_libraries")
+        .or_else(|| parsed.get("libraries"))
+        .or_else(|| parsed.get("result").and_then(|r| r.get("installed_libraries")))
+        .or_else(|| parsed.get("result").and_then(|r| r.get("libraries")))
+        .and_then(|v| v.as_array());
+
+    let mut libs = Vec::new();
+    let mut seen = HashSet::new();
+    if let Some(items) = arr {
+        for l in items {
+            let item = l.get("library").unwrap_or(l);
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let version = item
+                .get("version")
+                .or_else(|| l.get("release").and_then(|r| r.get("version")))
+                .or_else(|| item.get("latest"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            let key = name.to_lowercase();
+            if seen.insert(key) {
+                libs.push(CliInstalledLibrary { name, version });
+            }
+        }
+    }
+
+    Ok(libs)
+}
+
+#[tauri::command]
+async fn lib_uninstall(name: String) -> Result<CliRunResult, String> {
+    let lib_name = name.trim().to_string();
+    if lib_name.is_empty() {
+        return Err("Пустое имя библиотеки".to_string());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = Command::new("arduino-cli")
+            .arg("lib")
+            .arg("uninstall")
+            .arg(&lib_name)
+            .output()
+            .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
+
+        Ok(CliRunResult {
+            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            status: output.status.code().unwrap_or(-1),
+        })
+    })
+    .await
+    .map_err(|e| format!("Ошибка фонового удаления: {e}"))?
+}
+
+#[tauri::command]
 fn core_search(query: Option<String>) -> Result<Vec<CliCore>, String> {
     let mut cmd = Command::new("arduino-cli");
     cmd.arg("core").arg("search");
@@ -436,71 +525,144 @@ fn core_search(query: Option<String>) -> Result<Vec<CliCore>, String> {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
 
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("Ошибка разбора JSON: {e}"))?;
-
-    let arr = parsed
-        .get("platforms")
-        .or_else(|| parsed.get("cores"))
-        .or_else(|| parsed.get("result").and_then(|r| r.get("platforms")))
-        .or_else(|| parsed.get("result").and_then(|r| r.get("cores")))
-        .and_then(|v| v.as_array());
-
+    let stdout_text = String::from_utf8_lossy(&output.stdout).to_string();
     let mut cores = Vec::new();
-    if let Some(items) = arr {
-        for c in items {
-            let id = c
-                .get("id")
-                .or_else(|| c.get("ID"))
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let name = c
-                .get("name")
-                .or_else(|| c.get("Name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let latest = c
-                .get("latest")
-                .or_else(|| c.get("Latest"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
 
-            if id.is_empty() || name.is_empty() {
-                continue;
-            }
-            cores.push(CliCore { id, name, latest });
-        }
+    if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+        cores = parse_cores_from_json(&parsed);
+    }
+
+    if cores.is_empty() {
+        cores = parse_cores_from_table(&stdout_text);
+    }
+
+    if cores.is_empty() {
+        return Err("Не удалось получить список наборов плат (core search)".to_string());
     }
 
     Ok(cores)
 }
 
-#[tauri::command]
-fn core_install(name: String, version: Option<String>) -> Result<CliRunResult, String> {
-    let mut cmd = Command::new("arduino-cli");
-    cmd.arg("core").arg("install");
-    if let Some(v) = version.as_deref().map(str::trim) {
-        if !v.is_empty() {
-            cmd.arg(format!("{name}@{v}"));
-        } else {
-            cmd.arg(name);
-        }
-    } else {
-        cmd.arg(name);
+fn parse_cores_from_json(parsed: &serde_json::Value) -> Vec<CliCore> {
+    fn get_str_field<'a>(
+        obj: &'a serde_json::Map<String, serde_json::Value>,
+        keys: &[&str],
+    ) -> Option<&'a str> {
+        keys.iter()
+            .find_map(|k| obj.get(*k).and_then(|v| v.as_str()))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
     }
 
-    let output = cmd
-        .output()
-        .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
+    fn walk(value: &serde_json::Value, cores: &mut Vec<CliCore>, seen: &mut HashSet<String>) {
+        match value {
+            serde_json::Value::Object(obj) => {
+                let mut id = get_str_field(obj, &["id", "ID", "core", "Core", "fqbn", "FQBN"])
+                    .unwrap_or_default()
+                    .to_string();
+                let mut name = get_str_field(obj, &["name", "Name", "title", "Title"])
+                    .unwrap_or_default()
+                    .to_string();
+                let latest = get_str_field(obj, &["latest", "Latest", "version", "Version"])
+                    .map(|s| s.to_string());
 
-    Ok(CliRunResult {
-        success: output.status.success(),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        status: output.status.code().unwrap_or(-1),
+                if id.is_empty() && name.contains(':') {
+                    id = name.clone();
+                }
+                if !id.contains(':') {
+                    id.clear();
+                }
+                if !id.is_empty() {
+                    if name.is_empty() {
+                        name = id.clone();
+                    }
+                    if seen.insert(id.clone()) {
+                        cores.push(CliCore { id, name, latest });
+                    }
+                }
+
+                for v in obj.values() {
+                    walk(v, cores, seen);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for v in arr {
+                    walk(v, cores, seen);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut cores = Vec::new();
+    let mut seen = HashSet::new();
+    walk(parsed, &mut cores, &mut seen);
+    cores
+}
+
+fn parse_cores_from_table(stdout: &str) -> Vec<CliCore> {
+    let mut cores = Vec::new();
+    let mut seen = HashSet::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("ID ") || line.starts_with("ID\t") || line.starts_with("--") {
+            continue;
+        }
+
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.is_empty() {
+            continue;
+        }
+
+        let id = cols[0].trim().to_string();
+        if !id.contains(':') {
+            continue;
+        }
+
+        let latest = if cols.len() >= 3 && cols[2] != "-" {
+            Some(cols[2].to_string())
+        } else {
+            None
+        };
+        let name = if cols.len() >= 4 {
+            cols[3..].join(" ")
+        } else {
+            id.clone()
+        };
+
+        if seen.insert(id.clone()) {
+            cores.push(CliCore { id, name, latest });
+        }
+    }
+
+    cores
+}
+
+#[tauri::command]
+async fn core_install(name: String, _version: Option<String>) -> Result<CliRunResult, String> {
+    let core_name = name.trim().to_string();
+    if core_name.is_empty() {
+        return Err("Пустое имя набора плат".to_string());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = Command::new("arduino-cli")
+            .arg("core")
+            .arg("install")
+            .arg(&core_name)
+            .output()
+            .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
+
+        Ok(CliRunResult {
+            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            status: output.status.code().unwrap_or(-1),
+        })
     })
+    .await
+    .map_err(|e| format!("Ошибка фоновой установки: {e}"))?
 }
 
 fn main() {
@@ -576,7 +738,9 @@ fn main() {
             list_ports,
             board_listall,
             lib_search,
+            lib_list,
             lib_install,
+            lib_uninstall,
             core_search,
             core_install
         ])

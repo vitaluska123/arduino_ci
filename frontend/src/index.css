@@ -23,7 +23,7 @@ body,
 
 body {
     margin: 0;
-    touch-action: none; /* блокирует touch-pan / pinch */
+    touch-action: pan-y;
     -webkit-user-select: none;
     user-select: none;
 }

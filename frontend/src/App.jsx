@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { api } from "./api/arduinoCli";
 
 function App() {
@@ -14,9 +14,16 @@ function App() {
   const [boards, setBoards] = useState([]);
   const [boardQuery, setBoardQuery] = useState("");
 
-  const [extensionQuery, setExtensionQuery] = useState("");
-  const [extensions, setExtensions] = useState([]);
-  const [extBusy, setExtBusy] = useState(false);
+  const [libQuery, setLibQuery] = useState("");
+  const [libraries, setLibraries] = useState([]);
+  const [installedLibraries, setInstalledLibraries] = useState([]);
+  const [libsBusy, setLibsBusy] = useState(false);
+  const [libActionBusy, setLibActionBusy] = useState(false);
+
+  const [cores, setCores] = useState([]);
+  const [selectedCoreId, setSelectedCoreId] = useState("");
+  const [coreBusy, setCoreBusy] = useState(false);
+  const [coreInstallBusy, setCoreInstallBusy] = useState(false);
 
   const [log, setLog] = useState("");
   const [busy, setBusy] = useState(false);
@@ -28,6 +35,11 @@ function App() {
     ? "border-slate-600 bg-slate-900 text-slate-100"
     : "border-gray-300 bg-white text-gray-900";
   const mutedClass = isDark ? "text-slate-400" : "text-gray-500";
+
+  const installedLibSet = useMemo(
+    () => new Set(installedLibraries.map((x) => x.name.toLowerCase())),
+    [installedLibraries],
+  );
 
   const appendLog = (text) => {
     setLog((prev) => `${prev}${prev ? "\n" : ""}${text}`);
@@ -51,17 +63,48 @@ function App() {
     }
   };
 
-  const refreshExtensions = async (q = "") => {
-    setExtBusy(true);
+  const refreshLibraries = async (q = "") => {
+    setLibsBusy(true);
     try {
-      const data = await api.searchExtensions(q);
-      setExtensions(data);
+      const data = await api.searchLibraries(q);
+      setLibraries(data);
     } catch (e) {
-      appendLog(`Ошибка searchExtensions: ${String(e)}`);
+      appendLog(`Ошибка searchLibraries: ${String(e)}`);
     } finally {
-      setExtBusy(false);
+      setLibsBusy(false);
     }
   };
+
+  const refreshInstalledLibraries = async () => {
+    try {
+      const data = await api.listLibraries();
+      setInstalledLibraries(data);
+    } catch (e) {
+      appendLog(`Ошибка listLibraries: ${String(e)}`);
+    }
+  };
+
+  const refreshCores = async () => {
+    setCoreBusy(true);
+    try {
+      const data = await api.searchExtensions("");
+      setCores(data);
+    } catch (e) {
+      appendLog(`Ошибка core_search: ${String(e)}`);
+    } finally {
+      setCoreBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!cores.length) {
+      setSelectedCoreId("");
+      return;
+    }
+    if (!selectedCoreId || !cores.some((x) => x.id === selectedCoreId)) {
+      setSelectedCoreId(cores[0].id);
+    }
+  }, [cores, selectedCoreId]);
 
   useEffect(() => {
     if (!window.matchMedia) return;
@@ -91,7 +134,9 @@ function App() {
       }
       await refreshPorts();
       await refreshBoards("");
-      await refreshExtensions("");
+      await refreshLibraries("");
+      await refreshInstalledLibraries();
+      await refreshCores();
     })();
   }, []);
 
@@ -155,9 +200,11 @@ function App() {
     setBusy(false);
   };
 
-  const onInstallExtension = async (id, latest) => {
-    appendLog(`=== EXTENSION INSTALL START (${id}) ===`);
-    const res = await api.installExtension(id, latest || null).catch((e) => ({
+  const onInstallLibrary = async (name, latest) => {
+    if (libActionBusy) return;
+    setLibActionBusy(true);
+    appendLog(`=== LIB INSTALL START (${name}) ===`);
+    const res = await api.installLibrary(name, latest || null).catch((e) => ({
       success: false,
       stdout: "",
       stderr: String(e),
@@ -165,7 +212,44 @@ function App() {
     }));
     if (res.stdout) appendLog(res.stdout);
     if (res.stderr) appendLog(res.stderr);
-    appendLog(`=== EXTENSION INSTALL END (${id}, status=${res.status}) ===`);
+    appendLog(`=== LIB INSTALL END (${name}, status=${res.status}) ===`);
+    await refreshInstalledLibraries();
+    setLibActionBusy(false);
+  };
+
+  const onUninstallLibrary = async (name) => {
+    if (libActionBusy) return;
+    setLibActionBusy(true);
+    appendLog(`=== LIB UNINSTALL START (${name}) ===`);
+    const res = await api.uninstallLibrary(name).catch((e) => ({
+      success: false,
+      stdout: "",
+      stderr: String(e),
+      status: -1,
+    }));
+    if (res.stdout) appendLog(res.stdout);
+    if (res.stderr) appendLog(res.stderr);
+    appendLog(`=== LIB UNINSTALL END (${name}, status=${res.status}) ===`);
+    await refreshInstalledLibraries();
+    setLibActionBusy(false);
+  };
+
+  const onInstallCore = async () => {
+    if (!selectedCoreId || coreInstallBusy) {
+      return;
+    }
+    setCoreInstallBusy(true);
+    appendLog(`=== CORE INSTALL START (${selectedCoreId}) ===`);
+    const res = await api.installExtension(selectedCoreId, null).catch((e) => ({
+      success: false,
+      stdout: "",
+      stderr: String(e),
+      status: -1,
+    }));
+    if (res.stdout) appendLog(res.stdout);
+    if (res.stderr) appendLog(res.stderr);
+    appendLog(`=== CORE INSTALL END (${selectedCoreId}, status=${res.status}) ===`);
+    setCoreInstallBusy(false);
   };
 
   return (
@@ -177,16 +261,10 @@ function App() {
             <button className={`px-3 py-1 border ${inputClass}`} onClick={() => setActivePage("main")}>
               Главная
             </button>
-            <button
-              className={`px-3 py-1 border ${inputClass}`}
-              onClick={() => setActivePage("extensions")}
-            >
-              Extensions
+            <button className={`px-3 py-1 border ${inputClass}`} onClick={() => setActivePage("libs")}>
+              Libs
             </button>
-            <button
-              className={`px-3 py-1 border ${inputClass}`}
-              onClick={() => setActivePage("settings")}
-            >
+            <button className={`px-3 py-1 border ${inputClass}`} onClick={() => setActivePage("settings")}>
               Настройки
             </button>
           </div>
@@ -216,10 +294,7 @@ function App() {
                   onChange={(e) => setBoardQuery(e.target.value)}
                   placeholder="Поиск платы"
                 />
-                <button
-                  className={`px-3 py-1 border ${inputClass}`}
-                  onClick={() => refreshBoards(boardQuery)}
-                >
+                <button className={`px-3 py-1 border ${inputClass}`} onClick={() => refreshBoards(boardQuery)}>
                   Найти
                 </button>
               </div>
@@ -277,44 +352,64 @@ function App() {
             </div>
           )}
 
-          {activePage === "extensions" && (
-            <div className="flex flex-col gap-2 px-2 py-2">
-              <div className="text-sm font-semibold">Arduino extensions (cores)</div>
-              <div className="flex gap-2">
+          {activePage === "libs" && (
+            <div className="flex h-full min-h-0 flex-col gap-2 px-2 py-2">
+              <div className="text-sm font-semibold">Библиотеки (arduino-cli lib)</div>
+              <div className="flex flex-wrap gap-2">
                 <input
                   className={`flex-1 border px-2 py-1 ${inputClass}`}
-                  value={extensionQuery}
-                  onChange={(e) => setExtensionQuery(e.target.value)}
-                  placeholder="Поиск, например arduino"
+                  value={libQuery}
+                  onChange={(e) => setLibQuery(e.target.value)}
+                  placeholder="Поиск библиотеки"
                 />
                 <button
                   className={`px-3 py-1 border ${inputClass}`}
-                  disabled={extBusy}
-                  onClick={() => refreshExtensions(extensionQuery)}
+                  disabled={libsBusy || libActionBusy}
+                  onClick={() => refreshLibraries(libQuery)}
                 >
-                  Найти
+                  Поиск
+                </button>
+                <button
+                  className={`px-3 py-1 border ${inputClass}`}
+                  disabled={libActionBusy}
+                  onClick={refreshInstalledLibraries}
+                >
+                  Обновить установленные
                 </button>
               </div>
 
-              <div className="space-y-2 overflow-auto">
-                {extensions.map((ext) => (
-                  <div key={ext.id} className={`border px-2 py-2 flex items-center justify-between ${inputClass}`}>
-                    <div>
-                      <div className="text-sm font-medium">{ext.name}</div>
-                      <div className={`text-xs ${mutedClass}`}>
-                        {ext.id}
-                        {ext.latest ? ` (latest ${ext.latest})` : ""}
+              <div className="flex-1 min-h-0 space-y-2 overflow-y-auto">
+                {libraries.map((lib) => {
+                  const installed = installedLibSet.has((lib.name || "").toLowerCase());
+                  return (
+                    <div key={lib.name} className={`border px-2 py-2 flex items-center justify-between ${inputClass}`}>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium truncate">{lib.name}</div>
+                        <div className={`text-xs ${mutedClass}`}>
+                          {lib.latest ? `latest ${lib.latest}` : "version ?"}
+                        </div>
                       </div>
+                      {installed ? (
+                        <button
+                          className="px-3 py-1 border bg-red-700 text-white disabled:opacity-50"
+                          disabled={libActionBusy}
+                          onClick={() => onUninstallLibrary(lib.name)}
+                        >
+                          Uninstall
+                        </button>
+                      ) : (
+                        <button
+                          className="px-3 py-1 border bg-indigo-600 text-white disabled:opacity-50"
+                          disabled={libActionBusy}
+                          onClick={() => onInstallLibrary(lib.name, lib.latest)}
+                        >
+                          Install
+                        </button>
+                      )}
                     </div>
-                    <button
-                      className="px-3 py-1 border bg-indigo-600 text-white"
-                      onClick={() => onInstallExtension(ext.id, ext.latest)}
-                    >
-                      Install
-                    </button>
-                  </div>
-                ))}
-                {!extensions.length && <div className={`text-sm ${mutedClass}`}>Ничего не найдено</div>}
+                  );
+                })}
+                {!libraries.length && <div className={`text-sm ${mutedClass}`}>Ничего не найдено</div>}
               </div>
             </div>
           )}
@@ -331,6 +426,38 @@ function App() {
                 <option value="light">Light</option>
                 <option value="dark">Dark</option>
               </select>
+
+              <div className={`mt-2 border-t pt-2 ${isDark ? "border-slate-700" : "border-gray-300"}`}>
+                <div className="text-sm font-semibold mb-1">Наборы плат (arduino-cli core install)</div>
+                <div className="flex flex-wrap gap-2">
+                  <select
+                    className={`w-full max-w-[420px] border px-2 py-1 ${inputClass}`}
+                    value={selectedCoreId}
+                    onChange={(e) => setSelectedCoreId(e.target.value)}
+                  >
+                    {!cores.length && <option value="">Нет доступных наборов плат</option>}
+                    {cores.map((ext) => (
+                      <option key={ext.id} value={ext.id}>
+                        {ext.name} — {ext.id}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className={`px-3 py-1 border ${inputClass}`}
+                    disabled={coreBusy || coreInstallBusy}
+                    onClick={refreshCores}
+                  >
+                    Обновить список
+                  </button>
+                  <button
+                    className="px-3 py-1 border bg-indigo-600 text-white disabled:opacity-50"
+                    disabled={!selectedCoreId || coreInstallBusy}
+                    onClick={onInstallCore}
+                  >
+                    {coreInstallBusy ? "Установка..." : "Установить набор плат"}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>

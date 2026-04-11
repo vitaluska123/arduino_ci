@@ -6,8 +6,10 @@ export const api = {
     invoke("board_listall", { search: search || null }),
 
   searchLibraries: (query) => invoke("lib_search", { query }),
+  listLibraries: () => invoke("lib_list"),
   installLibrary: (name, version = null) =>
     invoke("lib_install", { name, version }),
+  uninstallLibrary: (name) => invoke("lib_uninstall", { name }),
   searchExtensions: (query = "") =>
     invoke("core_search", { query: query || null }),
   installExtension: (name, version = null) =>
