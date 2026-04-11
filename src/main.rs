@@ -107,7 +107,7 @@ fn show_window_bottom_right(app: &AppHandle) -> Result<(), String> {
 
     window.show().map_err(|e| e.to_string())?;
     window.unminimize().map_err(|e| e.to_string())?;
-    window.set_focus().map_err(|e| e.to_string())?;
+    let _ = window.set_focus();
 
     let monitor = window
         .current_monitor()
@@ -119,12 +119,16 @@ fn show_window_bottom_right(app: &AppHandle) -> Result<(), String> {
         let msize = m.size();
         let wsize = window.outer_size().map_err(|e| e.to_string())?;
 
-        let margin = 16.0;
-        let x = mpos.x as f64 + msize.width as f64 - wsize.width as f64 - margin;
-        let y = mpos.y as f64 + msize.height as f64 - wsize.height as f64 - margin;
+        let margin_x = 16.0;
+        let margin_y = 56.0;
+        let x = mpos.x as f64 + msize.width as f64 - wsize.width as f64 - margin_x;
+        let y = mpos.y as f64 + msize.height as f64 - wsize.height as f64 - margin_y;
 
         let _ = window.set_position(LogicalPosition::new(x, y));
     }
+
+    // One extra focus call after positioning improves first-open reliability on Windows.
+    let _ = window.set_focus();
 
     Ok(())
 }
@@ -889,11 +893,6 @@ fn main() {
                 window.on_window_event(move |event| match event {
                     WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
-                        if let Some(w) = app_for_close.get_webview_window("main") {
-                            let _ = w.hide();
-                        }
-                    }
-                    WindowEvent::Focused(false) => {
                         if let Some(w) = app_for_close.get_webview_window("main") {
                             let _ = w.hide();
                         }
