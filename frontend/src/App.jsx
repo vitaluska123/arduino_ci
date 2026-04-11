@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api/arduinoCli";
 
 function App() {
@@ -25,6 +25,15 @@ function App() {
   const [coreBusy, setCoreBusy] = useState(false);
   const [coreInstallBusy, setCoreInstallBusy] = useState(false);
 
+  const [serialPort, setSerialPort] = useState("");
+  const [serialBaud, setSerialBaud] = useState("115200");
+  const [serialRunning, setSerialRunning] = useState(false);
+  const [serialBusy, setSerialBusy] = useState(false);
+  const [serialOutput, setSerialOutput] = useState("");
+  const [serialInput, setSerialInput] = useState("");
+  const [serialAddNewline, setSerialAddNewline] = useState(true);
+  const serialOutputRef = useRef(null);
+
   const [log, setLog] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -43,6 +52,10 @@ function App() {
 
   const appendLog = (text) => {
     setLog((prev) => `${prev}${prev ? "\n" : ""}${text}`);
+  };
+
+  const appendSerial = (text) => {
+    setSerialOutput((prev) => `${prev}${text}`);
   };
 
   const refreshPorts = async () => {
@@ -96,6 +109,17 @@ function App() {
     }
   };
 
+  const refreshSerialStatus = async () => {
+    try {
+      const status = await api.serialStatus();
+      setSerialRunning(Boolean(status?.running));
+      if (status?.port) setSerialPort(status.port);
+      if (status?.baud_rate) setSerialBaud(String(status.baud_rate));
+    } catch (e) {
+      appendLog(`Ошибка serialStatus: ${String(e)}`);
+    }
+  };
+
   useEffect(() => {
     if (!cores.length) {
       setSelectedCoreId("");
@@ -105,6 +129,36 @@ function App() {
       setSelectedCoreId(cores[0].id);
     }
   }, [cores, selectedCoreId]);
+
+  useEffect(() => {
+    if (port && !serialPort) {
+      setSerialPort(port);
+    }
+  }, [port, serialPort]);
+
+  useEffect(() => {
+    const node = serialOutputRef.current;
+    if (node) {
+      node.scrollTop = node.scrollHeight;
+    }
+  }, [serialOutput]);
+
+  useEffect(() => {
+    if (!serialRunning) return undefined;
+
+    const tick = async () => {
+      try {
+        const data = await api.serialTakeOutput();
+        if (data) appendSerial(String(data));
+      } catch {
+        // ignore poll errors while stopping/starting monitor
+      }
+    };
+
+    tick();
+    const id = setInterval(tick, 120);
+    return () => clearInterval(id);
+  }, [serialRunning]);
 
   useEffect(() => {
     if (!window.matchMedia) return;
@@ -137,6 +191,7 @@ function App() {
       await refreshLibraries("");
       await refreshInstalledLibraries();
       await refreshCores();
+      await refreshSerialStatus();
     })();
   }, []);
 
@@ -235,9 +290,7 @@ function App() {
   };
 
   const onInstallCore = async () => {
-    if (!selectedCoreId || coreInstallBusy) {
-      return;
-    }
+    if (!selectedCoreId || coreInstallBusy) return;
     setCoreInstallBusy(true);
     appendLog(`=== CORE INSTALL START (${selectedCoreId}) ===`);
     const res = await api.installExtension(selectedCoreId, null).catch((e) => ({
@@ -252,6 +305,54 @@ function App() {
     setCoreInstallBusy(false);
   };
 
+  const onSerialStart = async () => {
+    if (!serialPort) {
+      appendSerial("\n[serial] Выбери COM-порт\n");
+      return;
+    }
+    setSerialBusy(true);
+    try {
+      await api.serialStart(serialPort, Number(serialBaud));
+      setSerialRunning(true);
+      appendSerial(`\n[serial] started ${serialPort} @ ${serialBaud}\n`);
+    } catch (e) {
+      appendSerial(`\n[serial] start error: ${String(e)}\n`);
+      setSerialRunning(false);
+    } finally {
+      setSerialBusy(false);
+    }
+  };
+
+  const onSerialStop = async () => {
+    setSerialBusy(true);
+    try {
+      await api.serialStop();
+      const tail = await api.serialTakeOutput().catch(() => "");
+      if (tail) appendSerial(String(tail));
+      setSerialRunning(false);
+      appendSerial("\n[serial] stopped\n");
+    } catch (e) {
+      appendSerial(`\n[serial] stop error: ${String(e)}\n`);
+    } finally {
+      setSerialBusy(false);
+    }
+  };
+
+  const onSerialSend = async () => {
+    if (!serialRunning) {
+      appendSerial("\n[serial] не запущен\n");
+      return;
+    }
+    if (!serialInput) return;
+    const payload = serialAddNewline ? `${serialInput}\n` : serialInput;
+    try {
+      await api.serialSend(payload);
+      setSerialInput("");
+    } catch (e) {
+      appendSerial(`\n[serial] send error: ${String(e)}\n`);
+    }
+  };
+
   return (
     <div className={`fixed inset-0 flex flex-col ${bgClass}`}>
       <div className={`border-b ${panelClass}`}>
@@ -263,6 +364,9 @@ function App() {
             </button>
             <button className={`px-3 py-1 border ${inputClass}`} onClick={() => setActivePage("libs")}>
               Libs
+            </button>
+            <button className={`px-3 py-1 border ${inputClass}`} onClick={() => setActivePage("serial")}>
+              Serial
             </button>
             <button className={`px-3 py-1 border ${inputClass}`} onClick={() => setActivePage("settings")}>
               Настройки
@@ -414,6 +518,101 @@ function App() {
             </div>
           )}
 
+          {activePage === "serial" && (
+            <div className="flex h-full min-h-0 flex-col gap-2 px-2 py-2">
+              <div className="text-sm font-semibold">Serial Monitor</div>
+              <div className="flex flex-wrap gap-2">
+                <select
+                  className={`min-w-[140px] border px-2 py-1 ${inputClass}`}
+                  value={serialPort}
+                  onChange={(e) => setSerialPort(e.target.value)}
+                >
+                  <option value="">Порт</option>
+                  {ports.map((p) => (
+                    <option key={p.address} value={p.address}>
+                      {p.address}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className={`min-w-[120px] border px-2 py-1 ${inputClass}`}
+                  value={serialBaud}
+                  onChange={(e) => setSerialBaud(e.target.value)}
+                >
+                  {["9600", "19200", "38400", "57600", "115200", "230400"].map((b) => (
+                    <option key={b} value={b}>
+                      {b}
+                    </option>
+                  ))}
+                </select>
+                <button className={`px-3 py-1 border ${inputClass}`} onClick={refreshPorts}>
+                  Обновить порты
+                </button>
+                {!serialRunning ? (
+                  <button
+                    className="px-3 py-1 border bg-green-700 text-white disabled:opacity-50"
+                    disabled={serialBusy || !serialPort}
+                    onClick={onSerialStart}
+                  >
+                    {serialBusy ? "Запуск..." : "Start"}
+                  </button>
+                ) : (
+                  <button
+                    className="px-3 py-1 border bg-red-700 text-white disabled:opacity-50"
+                    disabled={serialBusy}
+                    onClick={onSerialStop}
+                  >
+                    {serialBusy ? "Остановка..." : "Stop"}
+                  </button>
+                )}
+                <button className={`px-3 py-1 border ${inputClass}`} onClick={() => setSerialOutput("")}>
+                  Clear
+                </button>
+                <span className={`text-xs self-center ${mutedClass}`}>
+                  {serialRunning ? `RUNNING ${serialPort}@${serialBaud}` : "STOPPED"}
+                </span>
+              </div>
+
+              <textarea
+                ref={serialOutputRef}
+                readOnly
+                value={serialOutput}
+                className="flex-1 min-h-0 w-full border p-2 font-mono text-xs bg-black text-green-300 resize-none overflow-y-auto"
+              />
+
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  className={`flex-1 min-w-[200px] border px-2 py-1 ${inputClass}`}
+                  value={serialInput}
+                  onChange={(e) => setSerialInput(e.target.value)}
+                  placeholder="Данные для отправки"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      onSerialSend();
+                    }
+                  }}
+                />
+                <label className={`text-xs ${mutedClass}`}>
+                  <input
+                    type="checkbox"
+                    checked={serialAddNewline}
+                    onChange={(e) => setSerialAddNewline(e.target.checked)}
+                    className="mr-1"
+                  />
+                  \n
+                </label>
+                <button
+                  className="px-3 py-1 border bg-indigo-600 text-white disabled:opacity-50"
+                  disabled={!serialRunning || !serialInput}
+                  onClick={onSerialSend}
+                >
+                  Send
+                </button>
+              </div>
+            </div>
+          )}
+
           {activePage === "settings" && (
             <div className="flex flex-col gap-2 px-2 py-2">
               <div className="text-sm font-semibold">Тема</div>
@@ -436,9 +635,9 @@ function App() {
                     onChange={(e) => setSelectedCoreId(e.target.value)}
                   >
                     {!cores.length && <option value="">Нет доступных наборов плат</option>}
-                    {cores.map((ext) => (
-                      <option key={ext.id} value={ext.id}>
-                        {ext.name} — {ext.id}
+                    {cores.map((core) => (
+                      <option key={core.id} value={core.id}>
+                        {core.name} — {core.id}
                       </option>
                     ))}
                   </select>

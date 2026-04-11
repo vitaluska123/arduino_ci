@@ -14,6 +14,11 @@ export const api = {
     invoke("core_search", { query: query || null }),
   installExtension: (name, version = null) =>
     invoke("core_install", { name, version }),
+  serialStatus: () => invoke("serial_status"),
+  serialStart: (port, baudRate) => invoke("serial_start", { port, baudRate }),
+  serialSend: (data) => invoke("serial_send", { data }),
+  serialTakeOutput: () => invoke("serial_take_output"),
+  serialStop: () => invoke("serial_stop"),
 
   pickProjectDir: () => invoke("pick_project_dir"),
   saveSession: (session) => invoke("save_session", { session }),
