@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, process::Command};
+use std::{collections::HashSet, fs, path::PathBuf, process::Command};
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -30,11 +30,19 @@ struct CliLibrary {
     website: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct CliCore {
+    id: String,
+    name: String,
+    latest: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 struct AppSession {
     project_path: Option<String>,
     fqbn: Option<String>,
     port: Option<String>,
+    theme: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -180,27 +188,45 @@ fn list_ports() -> Result<Vec<CliPort>, String> {
     let parsed: serde_json::Value =
         serde_json::from_slice(&output.stdout).map_err(|e| format!("Ошибка разбора JSON: {e}"))?;
 
+    let ports_json = parsed
+        .get("detected_ports")
+        .or_else(|| parsed.get("result").and_then(|r| r.get("detected_ports")))
+        .and_then(|v| v.as_array());
+
     let mut ports = Vec::new();
-    if let Some(arr) = parsed.get("detected_ports").and_then(|v| v.as_array()) {
+    if let Some(arr) = ports_json {
         for p in arr {
+            // Newer arduino-cli uses nested `port` object.
+            let port_obj = p.get("port").unwrap_or(p);
+
+            let address = port_obj
+                .get("address")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+
+            if address.is_empty() {
+                continue;
+            }
+
             ports.push(CliPort {
-                address: p
-                    .get("address")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                protocol: p
+                address,
+                protocol: port_obj
                     .get("protocol")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
-                protocol_label: p
+                protocol_label: port_obj
                     .get("protocol_label")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
-                properties: p.get("properties").cloned(),
-                hardware_id: p
+                properties: port_obj
+                    .get("properties")
+                    .cloned()
+                    .or_else(|| port_obj.get("properties_map").cloned())
+                    .or_else(|| p.get("properties").cloned()),
+                hardware_id: port_obj
                     .get("hardware_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
@@ -224,32 +250,102 @@ fn board_listall(search: Option<String>) -> Result<Vec<CliBoard>, String> {
         .output()
         .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
-    }
-
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("Ошибка разбора JSON: {e}"))?;
-
     let mut boards = Vec::new();
-    if let Some(arr) = parsed.get("boards").and_then(|v| v.as_array()) {
-        for b in arr {
-            boards.push(CliBoard {
-                name: b
+    let search_lc = search
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+
+    if output.status.success() {
+        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .map_err(|e| format!("Ошибка разбора JSON: {e}"))?;
+
+        if let Some(arr) = parsed.get("boards").and_then(|v| v.as_array()) {
+            for b in arr {
+                let name = b
                     .get("name")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
-                    .to_string(),
-                fqbn: b
+                    .to_string();
+                let fqbn = b
                     .get("fqbn")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
-                    .to_string(),
-            });
+                    .to_string();
+                if !name.is_empty() && !fqbn.is_empty() {
+                    boards.push(CliBoard { name, fqbn });
+                }
+            }
         }
     }
 
-    Ok(boards)
+    if boards.is_empty() {
+        let output_connected = Command::new("arduino-cli")
+            .args(["board", "list", "--format", "json"])
+            .output()
+            .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
+
+        if !output_connected.status.success() {
+            return Err(String::from_utf8_lossy(&output_connected.stderr).to_string());
+        }
+
+        let parsed: serde_json::Value = serde_json::from_slice(&output_connected.stdout)
+            .map_err(|e| format!("Ошибка разбора JSON: {e}"))?;
+        boards = parse_connected_boards(&parsed);
+    }
+
+    if search_lc.is_empty() {
+        return Ok(boards);
+    }
+
+    Ok(boards
+        .into_iter()
+        .filter(|b| {
+            b.name.to_lowercase().contains(&search_lc) || b.fqbn.to_lowercase().contains(&search_lc)
+        })
+        .collect())
+}
+
+fn parse_connected_boards(parsed: &serde_json::Value) -> Vec<CliBoard> {
+    let ports_json = parsed
+        .get("detected_ports")
+        .or_else(|| parsed.get("result").and_then(|r| r.get("detected_ports")))
+        .and_then(|v| v.as_array());
+
+    let mut boards = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Some(arr) = ports_json {
+        for p in arr {
+            let from_port = p
+                .get("matching_boards")
+                .or_else(|| p.get("port").and_then(|port| port.get("matching_boards")))
+                .and_then(|v| v.as_array());
+
+            if let Some(matches) = from_port {
+                for b in matches {
+                    let name = b
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let fqbn = b
+                        .get("fqbn")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+
+                    if name.is_empty() || fqbn.is_empty() || !seen.insert(fqbn.clone()) {
+                        continue;
+                    }
+                    boards.push(CliBoard { name, fqbn });
+                }
+            }
+        }
+    }
+
+    boards
 }
 
 #[tauri::command]
@@ -307,6 +403,92 @@ fn lib_install(name: String, version: Option<String>) -> Result<CliRunResult, St
         if !v.trim().is_empty() {
             cmd.arg("--version").arg(v);
         }
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
+
+    Ok(CliRunResult {
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        status: output.status.code().unwrap_or(-1),
+    })
+}
+
+#[tauri::command]
+fn core_search(query: Option<String>) -> Result<Vec<CliCore>, String> {
+    let mut cmd = Command::new("arduino-cli");
+    cmd.arg("core").arg("search");
+    if let Some(q) = query.as_deref().map(str::trim) {
+        if !q.is_empty() {
+            cmd.arg(q);
+        }
+    }
+    cmd.arg("--format").arg("json");
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Не удалось запустить arduino-cli: {e}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("Ошибка разбора JSON: {e}"))?;
+
+    let arr = parsed
+        .get("platforms")
+        .or_else(|| parsed.get("cores"))
+        .or_else(|| parsed.get("result").and_then(|r| r.get("platforms")))
+        .or_else(|| parsed.get("result").and_then(|r| r.get("cores")))
+        .and_then(|v| v.as_array());
+
+    let mut cores = Vec::new();
+    if let Some(items) = arr {
+        for c in items {
+            let id = c
+                .get("id")
+                .or_else(|| c.get("ID"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let name = c
+                .get("name")
+                .or_else(|| c.get("Name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let latest = c
+                .get("latest")
+                .or_else(|| c.get("Latest"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            if id.is_empty() || name.is_empty() {
+                continue;
+            }
+            cores.push(CliCore { id, name, latest });
+        }
+    }
+
+    Ok(cores)
+}
+
+#[tauri::command]
+fn core_install(name: String, version: Option<String>) -> Result<CliRunResult, String> {
+    let mut cmd = Command::new("arduino-cli");
+    cmd.arg("core").arg("install");
+    if let Some(v) = version.as_deref().map(str::trim) {
+        if !v.is_empty() {
+            cmd.arg(format!("{name}@{v}"));
+        } else {
+            cmd.arg(name);
+        }
+    } else {
+        cmd.arg(name);
     }
 
     let output = cmd
@@ -394,7 +576,9 @@ fn main() {
             list_ports,
             board_listall,
             lib_search,
-            lib_install
+            lib_install,
+            core_search,
+            core_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

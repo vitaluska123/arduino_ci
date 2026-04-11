@@ -8,6 +8,10 @@ export const api = {
   searchLibraries: (query) => invoke("lib_search", { query }),
   installLibrary: (name, version = null) =>
     invoke("lib_install", { name, version }),
+  searchExtensions: (query = "") =>
+    invoke("core_search", { query: query || null }),
+  installExtension: (name, version = null) =>
+    invoke("core_install", { name, version }),
 
   pickProjectDir: () => invoke("pick_project_dir"),
   saveSession: (session) => invoke("save_session", { session }),

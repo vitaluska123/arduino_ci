@@ -1,0 +1,24 @@
+[
+  {
+    "label": "Build Frontend",
+    "command": "cd \"C:\\Users\\strunder\\Desktop\\arduino_ci\\frontend\"; npm run build",
+    "shell": "system",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "dock",
+    "hide": "never",
+    "save": "all",
+  },
+  {
+    "label": "Run Cargo",
+    "command": "cargo run",
+    "shell": "system",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "dock",
+    "hide": "never",
+    "save": "all",
+  },
+]
