@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Полностью отключаем скролл и резиновый bounce */
+html,
+body,
+#root {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+}
+
+/* Запрет жестов прокрутки на тачпаде/таче */
+* {
+    overscroll-behavior: none;
+}
+
+body {
+    margin: 0;
+    touch-action: none; /* блокирует touch-pan / pinch */
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+/* Скрыть scrollbar на всякий случай */
+::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
