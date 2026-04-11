@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export const api = {
+  hideMainWindow: () => invoke("hide_main_window"),
   listPorts: () => invoke("list_ports"),
   listBoards: (search = "") =>
     invoke("board_listall", { search: search || null }),

@@ -182,6 +182,14 @@ fn pick_project_dir(_app: AppHandle) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+fn hide_main_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn save_session(app: AppHandle, session: AppSession) -> Result<(), String> {
     let path = session_file_path(&app)?;
     let text =
@@ -959,6 +967,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            hide_main_window,
             pick_project_dir,
             save_session,
             load_session,

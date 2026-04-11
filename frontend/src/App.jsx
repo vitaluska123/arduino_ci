@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api/arduinoCli";
 
 function App() {
@@ -34,21 +33,32 @@ function App() {
   const [serialInput, setSerialInput] = useState("");
   const [serialAddNewline, setSerialAddNewline] = useState(true);
   const serialOutputRef = useRef(null);
+  const logOutputRef = useRef(null);
 
   const [log, setLog] = useState("");
   const [busy, setBusy] = useState(false);
 
   const isDark = theme === "dark" || (theme === "system" && systemDark);
   const bgClass = isDark
-    ? "bg-slate-900 text-slate-100"
-    : "bg-gray-100 text-gray-900";
-  const panelClass = isDark
-    ? "bg-slate-800 border-slate-700"
-    : "bg-white border-gray-200";
+    ? "bg-slate-950 text-slate-100"
+    : "bg-slate-100 text-slate-900";
   const inputClass = isDark
-    ? "border-slate-600 bg-slate-900 text-slate-100"
-    : "border-gray-300 bg-white text-gray-900";
-  const mutedClass = isDark ? "text-slate-400" : "text-gray-500";
+    ? "h-10 rounded-xl border border-slate-700 bg-slate-900 px-3 text-slate-100"
+    : "h-10 rounded-xl border border-slate-300 bg-white px-3 text-slate-900";
+  const mutedClass = isDark ? "text-slate-400" : "text-slate-500";
+  const softCardClass = isDark
+    ? "rounded-2xl border border-slate-700 bg-slate-900/85"
+    : "rounded-2xl border border-slate-200 bg-white/95";
+  const outlineBtnClass = isDark
+    ? "h-10 rounded-xl border border-slate-700 bg-slate-900 px-3 text-slate-100 hover:bg-slate-800"
+    : "h-10 rounded-xl border border-slate-300 bg-white px-3 text-slate-900 hover:bg-slate-50";
+  const activeTabClass =
+    "h-10 rounded-xl border border-indigo-500 bg-indigo-600 px-3 text-white";
+  const idleTabClass = isDark
+    ? "h-10 rounded-xl border border-slate-700 bg-slate-900 px-3 text-slate-100 hover:bg-slate-800"
+    : "h-10 rounded-xl border border-slate-300 bg-white px-3 text-slate-900 hover:bg-slate-50";
+  const tabClass = (key) =>
+    activePage === key ? activeTabClass : idleTabClass;
 
   const installedLibSet = useMemo(
     () => new Set(installedLibraries.map((x) => x.name.toLowerCase())),
@@ -136,30 +146,29 @@ function App() {
   }, [cores, selectedCoreId]);
 
   useEffect(() => {
-    if (port && !serialPort) {
-      setSerialPort(port);
-    }
+    if (port && !serialPort) setSerialPort(port);
   }, [port, serialPort]);
 
   useEffect(() => {
     const node = serialOutputRef.current;
-    if (node) {
-      node.scrollTop = node.scrollHeight;
-    }
+    if (node) node.scrollTop = node.scrollHeight;
   }, [serialOutput]);
 
   useEffect(() => {
-    if (!serialRunning) return undefined;
+    const node = logOutputRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [log]);
 
+  useEffect(() => {
+    if (!serialRunning) return undefined;
     const tick = async () => {
       try {
         const data = await api.serialTakeOutput();
         if (data) appendSerial(String(data));
       } catch {
-        // ignore poll errors while stopping/starting monitor
+        // ignore polling errors while serial transitions
       }
     };
-
     tick();
     const id = setInterval(tick, 120);
     return () => clearInterval(id);
@@ -177,9 +186,9 @@ function App() {
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
     document.documentElement.style.backgroundColor = isDark
-      ? "#0f172a"
-      : "#f3f4f6";
-    document.body.style.backgroundColor = isDark ? "#0f172a" : "#f3f4f6";
+      ? "#020617"
+      : "#f1f5f9";
+    document.body.style.backgroundColor = isDark ? "#020617" : "#f1f5f9";
   }, [isDark]);
 
   useEffect(() => {
@@ -227,7 +236,6 @@ function App() {
       appendLog("Для compile нужны projectPath и fqbn");
       return;
     }
-
     setBusy(true);
     appendLog("=== COMPILE START ===");
     const res = await api.compileProject(projectPath, fqbn).catch((e) => ({
@@ -247,7 +255,6 @@ function App() {
       appendLog("Для upload нужны projectPath, fqbn и port");
       return;
     }
-
     setBusy(true);
     appendLog("=== UPLOAD START ===");
     const res = await api.uploadProject(projectPath, fqbn, port).catch((e) => ({
@@ -364,74 +371,86 @@ function App() {
 
   const onMinimizeToTray = async () => {
     try {
-      await getCurrentWindow().hide();
+      await api.hideMainWindow();
     } catch (e) {
       appendLog(`Ошибка сворачивания окна: ${String(e)}`);
     }
   };
 
   return (
-    <div className={`fixed inset-0 flex flex-col ${bgClass}`}>
-      <div className={`border-b ${panelClass}`}>
-        <div className="flex flex-wrap items-center justify-between gap-2 px-2 py-2">
-          <h1 className="text-lg font-semibold">Arduino CI</h1>
+    <div className={`fixed inset-0 flex flex-col gap-3 p-3 ${bgClass}`}>
+      <div className={`${softCardClass} px-3 py-3`}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h1 className="text-lg font-semibold tracking-tight">Arduino CI</h1>
+            <div className={`text-xs ${mutedClass}`}>
+              Build, upload, libs and serial monitor
+            </div>
+          </div>
+
           <div className="flex flex-wrap gap-2">
             <button
-              className={`px-3 py-1 border ${inputClass}`}
+              className={tabClass("main")}
               onClick={() => setActivePage("main")}
             >
               Главная
             </button>
             <button
-              className={`px-3 py-1 border ${inputClass}`}
+              className={tabClass("libs")}
               onClick={() => setActivePage("libs")}
             >
               Libs
             </button>
             <button
-              className={`px-3 py-1 border ${inputClass}`}
+              className={tabClass("serial")}
               onClick={() => setActivePage("serial")}
             >
               Serial
             </button>
             <button
-              className={`px-3 py-1 border ${inputClass}`}
+              className={tabClass("settings")}
               onClick={() => setActivePage("settings")}
             >
               Настройки
+            </button>
+            <button
+              className={outlineBtnClass}
+              onClick={onMinimizeToTray}
+              title="Свернуть в трей"
+            >
+              —
             </button>
           </div>
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 flex flex-col">
-        <div className="flex-1 min-h-0 overflow-auto">
+      <div
+        className={`${softCardClass} flex flex-1 min-h-0 flex-col overflow-hidden`}
+      >
+        <div className="min-h-0 flex-1 overflow-auto p-3">
           {activePage === "main" && (
-            <div className="flex flex-col gap-2 px-2 py-2">
+            <div className="flex flex-col gap-3">
               <div className="flex flex-wrap gap-2">
                 <input
-                  className={`flex-1 min-w-0 border px-2 py-1 ${inputClass}`}
+                  className={`min-w-0 flex-1 ${inputClass}`}
                   value={projectPath}
                   onChange={(e) => setProjectPath(e.target.value)}
                   placeholder="Путь к проекту"
                 />
-                <button
-                  className={`px-3 py-1 border ${inputClass}`}
-                  onClick={pickProject}
-                >
+                <button className={outlineBtnClass} onClick={pickProject}>
                   Выбрать
                 </button>
               </div>
 
               <div className="flex flex-wrap gap-2">
                 <input
-                  className={`w-56 border px-2 py-1 ${inputClass}`}
+                  className={`w-56 ${inputClass}`}
                   value={boardQuery}
                   onChange={(e) => setBoardQuery(e.target.value)}
                   placeholder="Поиск платы"
                 />
                 <button
-                  className={`px-3 py-1 border ${inputClass}`}
+                  className={outlineBtnClass}
                   onClick={() => refreshBoards(boardQuery)}
                 >
                   Найти
@@ -440,7 +459,7 @@ function App() {
 
               <div>
                 <select
-                  className={`w-full max-w-[360px] border px-2 py-1 ${inputClass}`}
+                  className={`w-full max-w-[440px] ${inputClass}`}
                   value={fqbn}
                   onChange={(e) => setFqbn(e.target.value)}
                 >
@@ -455,7 +474,7 @@ function App() {
 
               <div className="flex flex-wrap gap-2">
                 <select
-                  className={`flex-1 min-w-0 max-w-[360px] border px-2 py-1 ${inputClass}`}
+                  className={`min-w-0 max-w-[440px] flex-1 ${inputClass}`}
                   value={port}
                   onChange={(e) => setPort(e.target.value)}
                 >
@@ -466,55 +485,34 @@ function App() {
                     </option>
                   ))}
                 </select>
-
-                <button
-                  className={`px-3 py-1 border shrink-0 ${inputClass}`}
-                  onClick={refreshPorts}
-                >
+                <button className={outlineBtnClass} onClick={refreshPorts}>
                   Обновить порты
-                </button>
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  disabled={busy}
-                  onClick={onCompile}
-                  className="px-4 py-1 border bg-blue-600 text-white disabled:opacity-50"
-                >
-                  Compile
-                </button>
-                <button
-                  disabled={busy}
-                  onClick={onUpload}
-                  className="px-4 py-1 border bg-green-600 text-white disabled:opacity-50"
-                >
-                  Upload
                 </button>
               </div>
             </div>
           )}
 
           {activePage === "libs" && (
-            <div className="flex h-full min-h-0 flex-col gap-2 px-2 py-2">
+            <div className="flex h-full min-h-0 flex-col gap-3">
               <div className="text-sm font-semibold">
                 Библиотеки (arduino-cli lib)
               </div>
               <div className="flex flex-wrap gap-2">
                 <input
-                  className={`flex-1 border px-2 py-1 ${inputClass}`}
+                  className={`flex-1 ${inputClass}`}
                   value={libQuery}
                   onChange={(e) => setLibQuery(e.target.value)}
                   placeholder="Поиск библиотеки"
                 />
                 <button
-                  className={`px-3 py-1 border ${inputClass}`}
+                  className={outlineBtnClass}
                   disabled={libsBusy || libActionBusy}
                   onClick={() => refreshLibraries(libQuery)}
                 >
                   Поиск
                 </button>
                 <button
-                  className={`px-3 py-1 border ${inputClass}`}
+                  className={outlineBtnClass}
                   disabled={libActionBusy}
                   onClick={refreshInstalledLibraries}
                 >
@@ -530,10 +528,10 @@ function App() {
                   return (
                     <div
                       key={lib.name}
-                      className={`border px-2 py-2 flex items-center justify-between ${inputClass}`}
+                      className={`${softCardClass} flex items-center justify-between px-3 py-3`}
                     >
                       <div className="min-w-0">
-                        <div className="text-sm font-medium truncate">
+                        <div className="truncate text-sm font-medium">
                           {lib.name}
                         </div>
                         <div className={`text-xs ${mutedClass}`}>
@@ -542,7 +540,7 @@ function App() {
                       </div>
                       {installed ? (
                         <button
-                          className="px-3 py-1 border bg-red-700 text-white disabled:opacity-50"
+                          className="h-10 rounded-xl border border-red-500 bg-red-600 px-3 text-white disabled:opacity-50"
                           disabled={libActionBusy}
                           onClick={() => onUninstallLibrary(lib.name)}
                         >
@@ -550,7 +548,7 @@ function App() {
                         </button>
                       ) : (
                         <button
-                          className="px-3 py-1 border bg-indigo-600 text-white disabled:opacity-50"
+                          className="h-10 rounded-xl border border-indigo-500 bg-indigo-600 px-3 text-white disabled:opacity-50"
                           disabled={libActionBusy}
                           onClick={() => onInstallLibrary(lib.name, lib.latest)}
                         >
@@ -570,11 +568,11 @@ function App() {
           )}
 
           {activePage === "serial" && (
-            <div className="flex h-full min-h-0 flex-col gap-2 px-2 py-2">
+            <div className="flex h-full min-h-0 flex-col gap-3">
               <div className="text-sm font-semibold">Serial Monitor</div>
               <div className="flex flex-wrap gap-2">
                 <select
-                  className={`min-w-[140px] border px-2 py-1 ${inputClass}`}
+                  className={`min-w-[140px] ${inputClass}`}
                   value={serialPort}
                   onChange={(e) => setSerialPort(e.target.value)}
                 >
@@ -586,7 +584,7 @@ function App() {
                   ))}
                 </select>
                 <select
-                  className={`min-w-[120px] border px-2 py-1 ${inputClass}`}
+                  className={`min-w-[120px] ${inputClass}`}
                   value={serialBaud}
                   onChange={(e) => setSerialBaud(e.target.value)}
                 >
@@ -598,15 +596,12 @@ function App() {
                     ),
                   )}
                 </select>
-                <button
-                  className={`px-3 py-1 border ${inputClass}`}
-                  onClick={refreshPorts}
-                >
+                <button className={outlineBtnClass} onClick={refreshPorts}>
                   Обновить порты
                 </button>
                 {!serialRunning ? (
                   <button
-                    className="px-3 py-1 border bg-green-700 text-white disabled:opacity-50"
+                    className="h-10 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-white disabled:opacity-50"
                     disabled={serialBusy || !serialPort}
                     onClick={onSerialStart}
                   >
@@ -614,7 +609,7 @@ function App() {
                   </button>
                 ) : (
                   <button
-                    className="px-3 py-1 border bg-red-700 text-white disabled:opacity-50"
+                    className="h-10 rounded-xl border border-red-500 bg-red-600 px-3 text-white disabled:opacity-50"
                     disabled={serialBusy}
                     onClick={onSerialStop}
                   >
@@ -622,12 +617,12 @@ function App() {
                   </button>
                 )}
                 <button
-                  className={`px-3 py-1 border ${inputClass}`}
+                  className={outlineBtnClass}
                   onClick={() => setSerialOutput("")}
                 >
                   Clear
                 </button>
-                <span className={`text-xs self-center ${mutedClass}`}>
+                <span className={`self-center text-xs ${mutedClass}`}>
                   {serialRunning
                     ? `RUNNING ${serialPort}@${serialBaud}`
                     : "STOPPED"}
@@ -638,12 +633,12 @@ function App() {
                 ref={serialOutputRef}
                 readOnly
                 value={serialOutput}
-                className="flex-1 min-h-0 w-full border p-2 font-mono text-xs bg-black text-green-300 resize-none overflow-y-auto"
+                className="min-h-0 w-full flex-1 resize-none overflow-y-auto rounded-2xl border border-slate-700 bg-black p-3 font-mono text-xs text-green-300"
               />
 
               <div className="flex flex-wrap items-center gap-2">
                 <input
-                  className={`flex-1 min-w-[200px] border px-2 py-1 ${inputClass}`}
+                  className={`min-w-[200px] flex-1 ${inputClass}`}
                   value={serialInput}
                   onChange={(e) => setSerialInput(e.target.value)}
                   placeholder="Данные для отправки"
@@ -664,7 +659,7 @@ function App() {
                   \n
                 </label>
                 <button
-                  className="px-3 py-1 border bg-indigo-600 text-white disabled:opacity-50"
+                  className="h-10 rounded-xl border border-indigo-500 bg-indigo-600 px-3 text-white disabled:opacity-50"
                   disabled={!serialRunning || !serialInput}
                   onClick={onSerialSend}
                 >
@@ -675,10 +670,10 @@ function App() {
           )}
 
           {activePage === "settings" && (
-            <div className="flex flex-col gap-2 px-2 py-2">
+            <div className="flex flex-col gap-3">
               <div className="text-sm font-semibold">Тема</div>
               <select
-                className={`w-56 border px-2 py-1 ${inputClass}`}
+                className={`w-56 ${inputClass}`}
                 value={theme}
                 onChange={(e) => setTheme(e.target.value)}
               >
@@ -688,14 +683,14 @@ function App() {
               </select>
 
               <div
-                className={`mt-2 border-t pt-2 ${isDark ? "border-slate-700" : "border-gray-300"}`}
+                className={`mt-2 border-t pt-3 ${isDark ? "border-slate-700" : "border-slate-300"}`}
               >
-                <div className="text-sm font-semibold mb-1">
+                <div className="mb-1 text-sm font-semibold">
                   Наборы плат (arduino-cli core install)
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <select
-                    className={`w-full max-w-[420px] border px-2 py-1 ${inputClass}`}
+                    className={`w-full max-w-[440px] ${inputClass}`}
                     value={selectedCoreId}
                     onChange={(e) => setSelectedCoreId(e.target.value)}
                   >
@@ -709,14 +704,14 @@ function App() {
                     ))}
                   </select>
                   <button
-                    className={`px-3 py-1 border ${inputClass}`}
+                    className={outlineBtnClass}
                     disabled={coreBusy || coreInstallBusy}
                     onClick={refreshCores}
                   >
                     Обновить список
                   </button>
                   <button
-                    className="px-3 py-1 border bg-indigo-600 text-white disabled:opacity-50"
+                    className="h-10 rounded-xl border border-indigo-500 bg-indigo-600 px-3 text-white disabled:opacity-50"
                     disabled={!selectedCoreId || coreInstallBusy}
                     onClick={onInstallCore}
                   >
@@ -729,20 +724,34 @@ function App() {
         </div>
 
         {activePage === "main" && (
-          <div className={`border-t ${panelClass}`}>
-            <div className="flex items-center justify-between px-2 py-1">
-              <div className="text-xs font-semibold">Логи</div>
-              <button
-                onClick={() => setLog("")}
-                className={`px-3 py-1 text-xs border ${inputClass}`}
-              >
+          <div className="border-t border-slate-700/40 p-3 pt-2">
+            <div className="mb-2 flex items-center justify-between">
+              {/* <div className="text-xs font-semibold">Логи</div>*/}
+              <div className="flex gap-2">
+                <button
+                  disabled={busy}
+                  onClick={onCompile}
+                  className="h-10 rounded-xl border border-indigo-500 bg-indigo-600 px-4 text-white disabled:opacity-50"
+                >
+                  Compile
+                </button>
+                <button
+                  disabled={busy}
+                  onClick={onUpload}
+                  className="h-10 rounded-xl border border-emerald-500 bg-emerald-600 px-4 text-white disabled:opacity-50"
+                >
+                  Upload
+                </button>
+              </div>
+              <button onClick={() => setLog("")} className={outlineBtnClass}>
                 Clear log
               </button>
             </div>
             <textarea
+              ref={logOutputRef}
               readOnly
               value={log}
-              className="w-full h-[220px] border-0 border-t p-2 font-mono text-xs bg-black text-green-300 resize-none"
+              className="h-[220px] w-full resize-none rounded-2xl border border-slate-700 bg-black p-3 font-mono text-xs text-green-300"
             />
           </div>
         )}
