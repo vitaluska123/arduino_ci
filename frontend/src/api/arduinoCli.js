@@ -5,9 +5,13 @@ export const api = {
   listPorts: () => invoke("list_ports"),
   listBoards: (search = "") =>
     invoke("board_listall", { search: search || null }),
+  cliJobStart: (args) => invoke("cli_job_start", { args }),
+  cliJobTakeOutput: (jobId) => invoke("cli_job_take_output", { jobId }),
+  cliJobStatus: (jobId) => invoke("cli_job_status", { jobId }),
+  cliJobDrop: (jobId) => invoke("cli_job_drop", { jobId }),
 
   searchLibraries: (query) => invoke("lib_search", { query }),
-  listLibraries: () => invoke("lib_list"),
+  listLibraries: (forceRefresh = false) => invoke("lib_list", { forceRefresh }),
   installLibrary: (name, version = null) =>
     invoke("lib_install", { name, version }),
   uninstallLibrary: (name) => invoke("lib_uninstall", { name }),

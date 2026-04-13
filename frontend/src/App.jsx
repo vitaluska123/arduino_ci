@@ -1,9 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api/arduinoCli";
+import { runCliJob } from "./utils/runCliJob";
+import AppHeader from "./components/AppHeader";
+import MainTab from "./components/MainTab";
+import LibsTab from "./components/LibsTab";
+import SerialTab from "./components/SerialTab";
+import SettingsTab from "./components/SettingsTab";
+import LogPanel from "./components/LogPanel";
+
+const LIBS_CACHE_KEY = "arduino_ci_installed_libs_v1";
 
 function App() {
   const [activePage, setActivePage] = useState("main");
-
   const [projectPath, setProjectPath] = useState("");
   const [fqbn, setFqbn] = useState("");
   const [port, setPort] = useState("");
@@ -18,6 +26,7 @@ function App() {
   const [libraries, setLibraries] = useState([]);
   const [installedLibraries, setInstalledLibraries] = useState([]);
   const [libsBusy, setLibsBusy] = useState(false);
+  const [libsSyncing, setLibsSyncing] = useState(false);
   const [libActionBusy, setLibActionBusy] = useState(false);
 
   const [cores, setCores] = useState([]);
@@ -32,16 +41,15 @@ function App() {
   const [serialOutput, setSerialOutput] = useState("");
   const [serialInput, setSerialInput] = useState("");
   const [serialAddNewline, setSerialAddNewline] = useState(true);
-  const serialOutputRef = useRef(null);
-  const logOutputRef = useRef(null);
 
   const [log, setLog] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const serialOutputRef = useRef(null);
+  const logOutputRef = useRef(null);
+
   const isDark = theme === "dark" || (theme === "system" && systemDark);
-  const bgClass = isDark
-    ? "bg-slate-950 text-slate-100"
-    : "bg-slate-100 text-slate-900";
+  const bgClass = isDark ? "bg-slate-950 text-slate-100" : "bg-slate-100 text-slate-900";
   const inputClass = isDark
     ? "h-10 rounded-xl border border-slate-700 bg-slate-900 px-3 text-slate-100"
     : "h-10 rounded-xl border border-slate-300 bg-white px-3 text-slate-900";
@@ -57,8 +65,7 @@ function App() {
   const idleTabClass = isDark
     ? "h-10 rounded-xl border border-slate-700 bg-slate-900 px-3 text-slate-100 hover:bg-slate-800"
     : "h-10 rounded-xl border border-slate-300 bg-white px-3 text-slate-900 hover:bg-slate-50";
-  const tabClass = (key) =>
-    activePage === key ? activeTabClass : idleTabClass;
+  const tabClass = (key) => (activePage === key ? activeTabClass : idleTabClass);
 
   const installedLibSet = useMemo(
     () => new Set(installedLibraries.map((x) => x.name.toLowerCase())),
@@ -75,8 +82,7 @@ function App() {
 
   const refreshPorts = async () => {
     try {
-      const data = await api.listPorts();
-      setPorts(data);
+      setPorts(await api.listPorts());
     } catch (e) {
       appendLog(`Ошибка listPorts: ${String(e)}`);
     }
@@ -84,8 +90,7 @@ function App() {
 
   const refreshBoards = async (q = "") => {
     try {
-      const data = await api.listBoards(q);
-      setBoards(data);
+      setBoards(await api.listBoards(q));
     } catch (e) {
       appendLog(`Ошибка listBoards: ${String(e)}`);
     }
@@ -94,8 +99,7 @@ function App() {
   const refreshLibraries = async (q = "") => {
     setLibsBusy(true);
     try {
-      const data = await api.searchLibraries(q);
-      setLibraries(data);
+      setLibraries(await api.searchLibraries(q));
     } catch (e) {
       appendLog(`Ошибка searchLibraries: ${String(e)}`);
     } finally {
@@ -103,20 +107,23 @@ function App() {
     }
   };
 
-  const refreshInstalledLibraries = async () => {
+  const refreshInstalledLibraries = async (forceRefresh = false) => {
+    setLibsSyncing(true);
     try {
-      const data = await api.listLibraries();
+      const data = await api.listLibraries(forceRefresh);
       setInstalledLibraries(data);
+      localStorage.setItem(LIBS_CACHE_KEY, JSON.stringify(data));
     } catch (e) {
       appendLog(`Ошибка listLibraries: ${String(e)}`);
+    } finally {
+      setLibsSyncing(false);
     }
   };
 
   const refreshCores = async () => {
     setCoreBusy(true);
     try {
-      const data = await api.searchExtensions("");
-      setCores(data);
+      setCores(await api.searchExtensions(""));
     } catch (e) {
       appendLog(`Ошибка core_search: ${String(e)}`);
     } finally {
@@ -185,9 +192,7 @@ function App() {
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
-    document.documentElement.style.backgroundColor = isDark
-      ? "#020617"
-      : "#f1f5f9";
+    document.documentElement.style.backgroundColor = isDark ? "#020617" : "#f1f5f9";
     document.body.style.backgroundColor = isDark ? "#020617" : "#f1f5f9";
   }, [isDark]);
 
@@ -202,13 +207,24 @@ function App() {
       } catch (e) {
         appendLog(`loadSession: ${String(e)}`);
       }
-      await refreshPorts();
-      await refreshBoards("");
-      await refreshLibraries("");
-      await refreshInstalledLibraries();
-      await refreshCores();
-      await refreshSerialStatus();
     })();
+
+    try {
+      const cached = localStorage.getItem(LIBS_CACHE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) setInstalledLibraries(parsed);
+      }
+    } catch {
+      // ignore corrupted local cache
+    }
+
+    refreshPorts();
+    refreshBoards("");
+    refreshLibraries("");
+    refreshInstalledLibraries(true);
+    refreshCores();
+    refreshSerialStatus();
   }, []);
 
   useEffect(() => {
@@ -237,17 +253,19 @@ function App() {
       return;
     }
     setBusy(true);
-    appendLog("=== COMPILE START ===");
-    const res = await api.compileProject(projectPath, fqbn).catch((e) => ({
-      success: false,
-      stdout: "",
-      stderr: String(e),
-      status: -1,
-    }));
-    if (res.stdout) appendLog(res.stdout);
-    if (res.stderr) appendLog(res.stderr);
-    appendLog(`=== COMPILE END (status=${res.status}) ===`);
-    setBusy(false);
+    try {
+      await runCliJob({
+        api,
+        args: ["compile", "--fqbn", fqbn, projectPath],
+        appendLog,
+        startLine: "=== COMPILE START ===",
+        endLine: (code) => `=== COMPILE END (status=${code}) ===`,
+      });
+    } catch (e) {
+      appendLog(`Ошибка compile: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const onUpload = async () => {
@@ -256,69 +274,76 @@ function App() {
       return;
     }
     setBusy(true);
-    appendLog("=== UPLOAD START ===");
-    const res = await api.uploadProject(projectPath, fqbn, port).catch((e) => ({
-      success: false,
-      stdout: "",
-      stderr: String(e),
-      status: -1,
-    }));
-    if (res.stdout) appendLog(res.stdout);
-    if (res.stderr) appendLog(res.stderr);
-    appendLog(`=== UPLOAD END (status=${res.status}) ===`);
-    setBusy(false);
+    try {
+      await runCliJob({
+        api,
+        args: ["upload", "-p", port, "--fqbn", fqbn, projectPath],
+        appendLog,
+        startLine: "=== UPLOAD START ===",
+        endLine: (code) => `=== UPLOAD END (status=${code}) ===`,
+      });
+    } catch (e) {
+      appendLog(`Ошибка upload: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const onInstallLibrary = async (name, latest) => {
+  const onInstallLibrary = async (name, _latest) => {
     if (libActionBusy) return;
     setLibActionBusy(true);
-    appendLog(`=== LIB INSTALL START (${name}) ===`);
-    const res = await api.installLibrary(name, latest || null).catch((e) => ({
-      success: false,
-      stdout: "",
-      stderr: String(e),
-      status: -1,
-    }));
-    if (res.stdout) appendLog(res.stdout);
-    if (res.stderr) appendLog(res.stderr);
-    appendLog(`=== LIB INSTALL END (${name}, status=${res.status}) ===`);
-    await refreshInstalledLibraries();
-    setLibActionBusy(false);
+    try {
+      await runCliJob({
+        api,
+        args: ["lib", "install", name],
+        appendLog,
+        startLine: `=== LIB INSTALL START (${name}) ===`,
+        endLine: (code) => `=== LIB INSTALL END (${name}, status=${code}) ===`,
+      });
+      await refreshInstalledLibraries(true);
+    } catch (e) {
+      appendLog(`Ошибка lib install: ${String(e)}`);
+    } finally {
+      setLibActionBusy(false);
+    }
   };
 
   const onUninstallLibrary = async (name) => {
     if (libActionBusy) return;
     setLibActionBusy(true);
-    appendLog(`=== LIB UNINSTALL START (${name}) ===`);
-    const res = await api.uninstallLibrary(name).catch((e) => ({
-      success: false,
-      stdout: "",
-      stderr: String(e),
-      status: -1,
-    }));
-    if (res.stdout) appendLog(res.stdout);
-    if (res.stderr) appendLog(res.stderr);
-    appendLog(`=== LIB UNINSTALL END (${name}, status=${res.status}) ===`);
-    await refreshInstalledLibraries();
-    setLibActionBusy(false);
+    try {
+      await runCliJob({
+        api,
+        args: ["lib", "uninstall", name],
+        appendLog,
+        startLine: `=== LIB UNINSTALL START (${name}) ===`,
+        endLine: (code) => `=== LIB UNINSTALL END (${name}, status=${code}) ===`,
+      });
+      await refreshInstalledLibraries(true);
+    } catch (e) {
+      appendLog(`Ошибка lib uninstall: ${String(e)}`);
+    } finally {
+      setLibActionBusy(false);
+    }
   };
 
   const onInstallCore = async () => {
     if (!selectedCoreId || coreInstallBusy) return;
     setCoreInstallBusy(true);
-    appendLog(`=== CORE INSTALL START (${selectedCoreId}) ===`);
-    const res = await api.installExtension(selectedCoreId, null).catch((e) => ({
-      success: false,
-      stdout: "",
-      stderr: String(e),
-      status: -1,
-    }));
-    if (res.stdout) appendLog(res.stdout);
-    if (res.stderr) appendLog(res.stderr);
-    appendLog(
-      `=== CORE INSTALL END (${selectedCoreId}, status=${res.status}) ===`,
-    );
-    setCoreInstallBusy(false);
+    try {
+      await runCliJob({
+        api,
+        args: ["core", "install", selectedCoreId],
+        appendLog,
+        startLine: `=== CORE INSTALL START (${selectedCoreId}) ===`,
+        endLine: (code) =>
+          `=== CORE INSTALL END (${selectedCoreId}, status=${code}) ===`,
+      });
+    } catch (e) {
+      appendLog(`Ошибка core install: ${String(e)}`);
+    } finally {
+      setCoreInstallBusy(false);
+    }
   };
 
   const onSerialStart = async () => {
@@ -379,381 +404,111 @@ function App() {
 
   return (
     <div className={`fixed inset-0 flex flex-col gap-3 p-3 ${bgClass}`}>
-      <div className={`${softCardClass} px-3 py-3`}>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight">Arduino CI</h1>
-            <div className={`text-xs ${mutedClass}`}>
-              Build, upload, libs and serial monitor
-            </div>
-          </div>
+      <AppHeader
+        activePage={activePage}
+        setActivePage={setActivePage}
+        tabClass={tabClass}
+        outlineBtnClass={outlineBtnClass}
+        onMinimizeToTray={onMinimizeToTray}
+        mutedClass={mutedClass}
+      />
 
-          <div className="flex flex-wrap gap-2">
-            <button
-              className={tabClass("main")}
-              onClick={() => setActivePage("main")}
-            >
-              Главная
-            </button>
-            <button
-              className={tabClass("libs")}
-              onClick={() => setActivePage("libs")}
-            >
-              Libs
-            </button>
-            <button
-              className={tabClass("serial")}
-              onClick={() => setActivePage("serial")}
-            >
-              Serial
-            </button>
-            <button
-              className={tabClass("settings")}
-              onClick={() => setActivePage("settings")}
-            >
-              Настройки
-            </button>
-            <button
-              className={outlineBtnClass}
-              onClick={onMinimizeToTray}
-              title="Свернуть в трей"
-            >
-              —
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div
-        className={`${softCardClass} flex flex-1 min-h-0 flex-col overflow-hidden`}
-      >
+      <div className={`${softCardClass} flex flex-1 min-h-0 flex-col overflow-hidden`}>
         <div className="min-h-0 flex-1 overflow-auto p-3">
           {activePage === "main" && (
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-wrap gap-2">
-                <input
-                  className={`min-w-0 flex-1 ${inputClass}`}
-                  value={projectPath}
-                  onChange={(e) => setProjectPath(e.target.value)}
-                  placeholder="Путь к проекту"
-                />
-                <button className={outlineBtnClass} onClick={pickProject}>
-                  Выбрать
-                </button>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <input
-                  className={`w-56 ${inputClass}`}
-                  value={boardQuery}
-                  onChange={(e) => setBoardQuery(e.target.value)}
-                  placeholder="Поиск платы"
-                />
-                <button
-                  className={outlineBtnClass}
-                  onClick={() => refreshBoards(boardQuery)}
-                >
-                  Найти
-                </button>
-              </div>
-
-              <div>
-                <select
-                  className={`w-full max-w-[440px] ${inputClass}`}
-                  value={fqbn}
-                  onChange={(e) => setFqbn(e.target.value)}
-                >
-                  <option value="">Выбери плату (fqbn)</option>
-                  {boards.map((b) => (
-                    <option key={`${b.fqbn}-${b.name}`} value={b.fqbn}>
-                      {b.name} — {b.fqbn}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <select
-                  className={`min-w-0 max-w-[440px] flex-1 ${inputClass}`}
-                  value={port}
-                  onChange={(e) => setPort(e.target.value)}
-                >
-                  <option value="">Выбери порт</option>
-                  {ports.map((p) => (
-                    <option key={p.address} value={p.address}>
-                      {p.address} ({p.protocol_label || p.protocol})
-                    </option>
-                  ))}
-                </select>
-                <button className={outlineBtnClass} onClick={refreshPorts}>
-                  Обновить порты
-                </button>
-              </div>
-            </div>
+            <MainTab
+              inputClass={inputClass}
+              outlineBtnClass={outlineBtnClass}
+              projectPath={projectPath}
+              setProjectPath={setProjectPath}
+              boardQuery={boardQuery}
+              setBoardQuery={setBoardQuery}
+              refreshBoards={refreshBoards}
+              pickProject={pickProject}
+              boards={boards}
+              fqbn={fqbn}
+              setFqbn={setFqbn}
+              ports={ports}
+              port={port}
+              setPort={setPort}
+              refreshPorts={refreshPorts}
+            />
           )}
 
           {activePage === "libs" && (
-            <div className="flex h-full min-h-0 flex-col gap-3">
-              <div className="text-sm font-semibold">
-                Библиотеки (arduino-cli lib)
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <input
-                  className={`flex-1 ${inputClass}`}
-                  value={libQuery}
-                  onChange={(e) => setLibQuery(e.target.value)}
-                  placeholder="Поиск библиотеки"
-                />
-                <button
-                  className={outlineBtnClass}
-                  disabled={libsBusy || libActionBusy}
-                  onClick={() => refreshLibraries(libQuery)}
-                >
-                  Поиск
-                </button>
-                <button
-                  className={outlineBtnClass}
-                  disabled={libActionBusy}
-                  onClick={refreshInstalledLibraries}
-                >
-                  Обновить установленные
-                </button>
-              </div>
-
-              <div className="flex-1 min-h-0 space-y-2 overflow-y-auto">
-                {libraries.map((lib) => {
-                  const installed = installedLibSet.has(
-                    (lib.name || "").toLowerCase(),
-                  );
-                  return (
-                    <div
-                      key={lib.name}
-                      className={`${softCardClass} flex items-center justify-between px-3 py-3`}
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium">
-                          {lib.name}
-                        </div>
-                        <div className={`text-xs ${mutedClass}`}>
-                          {lib.latest ? `latest ${lib.latest}` : "version ?"}
-                        </div>
-                      </div>
-                      {installed ? (
-                        <button
-                          className="h-10 rounded-xl border border-red-500 bg-red-600 px-3 text-white disabled:opacity-50"
-                          disabled={libActionBusy}
-                          onClick={() => onUninstallLibrary(lib.name)}
-                        >
-                          Uninstall
-                        </button>
-                      ) : (
-                        <button
-                          className="h-10 rounded-xl border border-indigo-500 bg-indigo-600 px-3 text-white disabled:opacity-50"
-                          disabled={libActionBusy}
-                          onClick={() => onInstallLibrary(lib.name, lib.latest)}
-                        >
-                          Install
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-                {!libraries.length && (
-                  <div className={`text-sm ${mutedClass}`}>
-                    Ничего не найдено
-                  </div>
-                )}
-              </div>
-            </div>
+            <LibsTab
+              inputClass={inputClass}
+              outlineBtnClass={outlineBtnClass}
+              softCardClass={softCardClass}
+              mutedClass={mutedClass}
+              libQuery={libQuery}
+              setLibQuery={setLibQuery}
+              libsBusy={libsBusy}
+              libsSyncing={libsSyncing}
+              libActionBusy={libActionBusy}
+              refreshLibraries={refreshLibraries}
+              refreshInstalledLibraries={refreshInstalledLibraries}
+              libraries={libraries}
+              installedLibSet={installedLibSet}
+              onInstallLibrary={onInstallLibrary}
+              onUninstallLibrary={onUninstallLibrary}
+            />
           )}
 
           {activePage === "serial" && (
-            <div className="flex h-full min-h-0 flex-col gap-3">
-              <div className="text-sm font-semibold">Serial Monitor</div>
-              <div className="flex flex-wrap gap-2">
-                <select
-                  className={`min-w-[140px] ${inputClass}`}
-                  value={serialPort}
-                  onChange={(e) => setSerialPort(e.target.value)}
-                >
-                  <option value="">Порт</option>
-                  {ports.map((p) => (
-                    <option key={p.address} value={p.address}>
-                      {p.address}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  className={`min-w-[120px] ${inputClass}`}
-                  value={serialBaud}
-                  onChange={(e) => setSerialBaud(e.target.value)}
-                >
-                  {["9600", "19200", "38400", "57600", "115200", "230400"].map(
-                    (b) => (
-                      <option key={b} value={b}>
-                        {b}
-                      </option>
-                    ),
-                  )}
-                </select>
-                <button className={outlineBtnClass} onClick={refreshPorts}>
-                  Обновить порты
-                </button>
-                {!serialRunning ? (
-                  <button
-                    className="h-10 rounded-xl border border-emerald-500 bg-emerald-600 px-3 text-white disabled:opacity-50"
-                    disabled={serialBusy || !serialPort}
-                    onClick={onSerialStart}
-                  >
-                    {serialBusy ? "Запуск..." : "Start"}
-                  </button>
-                ) : (
-                  <button
-                    className="h-10 rounded-xl border border-red-500 bg-red-600 px-3 text-white disabled:opacity-50"
-                    disabled={serialBusy}
-                    onClick={onSerialStop}
-                  >
-                    {serialBusy ? "Остановка..." : "Stop"}
-                  </button>
-                )}
-                <button
-                  className={outlineBtnClass}
-                  onClick={() => setSerialOutput("")}
-                >
-                  Clear
-                </button>
-                <span className={`self-center text-xs ${mutedClass}`}>
-                  {serialRunning
-                    ? `RUNNING ${serialPort}@${serialBaud}`
-                    : "STOPPED"}
-                </span>
-              </div>
-
-              <textarea
-                ref={serialOutputRef}
-                readOnly
-                value={serialOutput}
-                className="min-h-0 w-full flex-1 resize-none overflow-y-auto rounded-2xl border border-slate-700 bg-black p-3 font-mono text-xs text-green-300"
-              />
-
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  className={`min-w-[200px] flex-1 ${inputClass}`}
-                  value={serialInput}
-                  onChange={(e) => setSerialInput(e.target.value)}
-                  placeholder="Данные для отправки"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      onSerialSend();
-                    }
-                  }}
-                />
-                <label className={`text-xs ${mutedClass}`}>
-                  <input
-                    type="checkbox"
-                    checked={serialAddNewline}
-                    onChange={(e) => setSerialAddNewline(e.target.checked)}
-                    className="mr-1"
-                  />
-                  \n
-                </label>
-                <button
-                  className="h-10 rounded-xl border border-indigo-500 bg-indigo-600 px-3 text-white disabled:opacity-50"
-                  disabled={!serialRunning || !serialInput}
-                  onClick={onSerialSend}
-                >
-                  Send
-                </button>
-              </div>
-            </div>
+            <SerialTab
+              inputClass={inputClass}
+              outlineBtnClass={outlineBtnClass}
+              serialPort={serialPort}
+              setSerialPort={setSerialPort}
+              ports={ports}
+              serialBaud={serialBaud}
+              setSerialBaud={setSerialBaud}
+              refreshPorts={refreshPorts}
+              serialRunning={serialRunning}
+              serialBusy={serialBusy}
+              onSerialStart={onSerialStart}
+              onSerialStop={onSerialStop}
+              serialOutputRef={serialOutputRef}
+              serialOutput={serialOutput}
+              setSerialOutput={setSerialOutput}
+              mutedClass={mutedClass}
+              serialInput={serialInput}
+              setSerialInput={setSerialInput}
+              serialAddNewline={serialAddNewline}
+              setSerialAddNewline={setSerialAddNewline}
+              onSerialSend={onSerialSend}
+            />
           )}
 
           {activePage === "settings" && (
-            <div className="flex flex-col gap-3">
-              <div className="text-sm font-semibold">Тема</div>
-              <select
-                className={`w-56 ${inputClass}`}
-                value={theme}
-                onChange={(e) => setTheme(e.target.value)}
-              >
-                <option value="system">System</option>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
-
-              <div
-                className={`mt-2 border-t pt-3 ${isDark ? "border-slate-700" : "border-slate-300"}`}
-              >
-                <div className="mb-1 text-sm font-semibold">
-                  Наборы плат (arduino-cli core install)
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <select
-                    className={`w-full max-w-[440px] ${inputClass}`}
-                    value={selectedCoreId}
-                    onChange={(e) => setSelectedCoreId(e.target.value)}
-                  >
-                    {!cores.length && (
-                      <option value="">Нет доступных наборов плат</option>
-                    )}
-                    {cores.map((core) => (
-                      <option key={core.id} value={core.id}>
-                        {core.name} — {core.id}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    className={outlineBtnClass}
-                    disabled={coreBusy || coreInstallBusy}
-                    onClick={refreshCores}
-                  >
-                    Обновить список
-                  </button>
-                  <button
-                    className="h-10 rounded-xl border border-indigo-500 bg-indigo-600 px-3 text-white disabled:opacity-50"
-                    disabled={!selectedCoreId || coreInstallBusy}
-                    onClick={onInstallCore}
-                  >
-                    {coreInstallBusy ? "Установка..." : "Установить набор плат"}
-                  </button>
-                </div>
-              </div>
-            </div>
+            <SettingsTab
+              inputClass={inputClass}
+              isDark={isDark}
+              theme={theme}
+              setTheme={setTheme}
+              cores={cores}
+              selectedCoreId={selectedCoreId}
+              setSelectedCoreId={setSelectedCoreId}
+              coreBusy={coreBusy}
+              coreInstallBusy={coreInstallBusy}
+              refreshCores={refreshCores}
+              onInstallCore={onInstallCore}
+              outlineBtnClass={outlineBtnClass}
+            />
           )}
         </div>
 
         {activePage === "main" && (
-          <div className="border-t border-slate-700/40 p-3 pt-2">
-            <div className="mb-2 flex items-center justify-between">
-              {/* <div className="text-xs font-semibold">Логи</div>*/}
-              <div className="flex gap-2">
-                <button
-                  disabled={busy}
-                  onClick={onCompile}
-                  className="h-10 rounded-xl border border-indigo-500 bg-indigo-600 px-4 text-white disabled:opacity-50"
-                >
-                  Compile
-                </button>
-                <button
-                  disabled={busy}
-                  onClick={onUpload}
-                  className="h-10 rounded-xl border border-emerald-500 bg-emerald-600 px-4 text-white disabled:opacity-50"
-                >
-                  Upload
-                </button>
-              </div>
-              <button onClick={() => setLog("")} className={outlineBtnClass}>
-                Clear log
-              </button>
-            </div>
-            <textarea
-              ref={logOutputRef}
-              readOnly
-              value={log}
-              className="h-[220px] w-full resize-none rounded-2xl border border-slate-700 bg-black p-3 font-mono text-xs text-green-300"
-            />
-          </div>
+          <LogPanel
+            logOutputRef={logOutputRef}
+            log={log}
+            setLog={setLog}
+            outlineBtnClass={outlineBtnClass}
+            busy={busy}
+            onCompile={onCompile}
+            onUpload={onUpload}
+          />
         )}
       </div>
     </div>
