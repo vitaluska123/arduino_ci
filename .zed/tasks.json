@@ -23,7 +23,7 @@
   },
   {
     "label": "Build Cargo",
-    "command": "cargo build",
+    "command": "cargo build --release",
     "shell": "system",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
