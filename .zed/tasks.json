@@ -1,7 +1,7 @@
 [
   {
     "label": "Build Frontend",
-    "command": "cd \"C:\\Users\\strunder\\Desktop\\arduino_ci\\frontend\"; npm run build",
+    "command": "npm --prefix frontend run build",
     "shell": "system",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
