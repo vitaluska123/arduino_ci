@@ -7,9 +7,11 @@ export default function AppHeader({
   outlineBtnClass,
   onMinimizeToTray,
   mutedClass,
+  softCardClass,
 }) {
+  const headerClass = softCardClass || "rounded-2xl border border-slate-200 bg-white/95";
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white/95 px-3 py-3 dark:border-slate-700 dark:bg-slate-900/85">
+    <div className={`${headerClass} px-3 py-3`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Arduino CI</h1>

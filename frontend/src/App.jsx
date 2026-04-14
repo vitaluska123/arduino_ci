@@ -9,6 +9,13 @@ import SettingsTab from "./components/SettingsTab";
 import LogPanel from "./components/LogPanel";
 
 const LIBS_CACHE_KEY = "arduino_ci_installed_libs_v1";
+const normalizeTheme = (value) => {
+  const v = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (v === "dark" || v === "light" || v === "system") return v;
+  return "system";
+};
 
 function App() {
   const [activePage, setActivePage] = useState("main");
@@ -48,7 +55,8 @@ function App() {
   const serialOutputRef = useRef(null);
   const logOutputRef = useRef(null);
 
-  const isDark = theme === "dark" || (theme === "system" && systemDark);
+  const safeTheme = normalizeTheme(theme);
+  const isDark = safeTheme === "dark" || (safeTheme === "system" && systemDark);
   const bgClass = isDark ? "bg-slate-950 text-slate-100" : "bg-slate-100 text-slate-900";
   const inputClass = isDark
     ? "h-10 rounded-xl border border-slate-700 bg-slate-900 px-3 text-slate-100"
@@ -197,13 +205,19 @@ function App() {
   }, [isDark]);
 
   useEffect(() => {
+    if (theme !== safeTheme) {
+      setTheme(safeTheme);
+    }
+  }, [theme, safeTheme]);
+
+  useEffect(() => {
     (async () => {
       try {
         const saved = await api.loadSession();
         if (saved?.project_path) setProjectPath(saved.project_path);
         if (saved?.fqbn) setFqbn(saved.fqbn);
         if (saved?.port) setPort(saved.port);
-        if (saved?.theme) setTheme(saved.theme);
+        if (saved?.theme) setTheme(normalizeTheme(saved.theme));
       } catch (e) {
         appendLog(`loadSession: ${String(e)}`);
       }
@@ -233,10 +247,10 @@ function App() {
         project_path: projectPath || null,
         fqbn: fqbn || null,
         port: port || null,
-        theme: theme || null,
+        theme: safeTheme || null,
       })
       .catch(() => {});
-  }, [projectPath, fqbn, port, theme]);
+  }, [projectPath, fqbn, port, safeTheme]);
 
   const pickProject = async () => {
     try {
@@ -411,6 +425,7 @@ function App() {
         outlineBtnClass={outlineBtnClass}
         onMinimizeToTray={onMinimizeToTray}
         mutedClass={mutedClass}
+        softCardClass={softCardClass}
       />
 
       <div className={`${softCardClass} flex flex-1 min-h-0 flex-col overflow-hidden`}>
@@ -485,8 +500,8 @@ function App() {
             <SettingsTab
               inputClass={inputClass}
               isDark={isDark}
-              theme={theme}
-              setTheme={setTheme}
+              theme={safeTheme}
+              setTheme={(next) => setTheme(normalizeTheme(next))}
               cores={cores}
               selectedCoreId={selectedCoreId}
               setSelectedCoreId={setSelectedCoreId}
